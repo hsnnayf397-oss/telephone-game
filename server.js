@@ -71,6 +71,54 @@ function addPlayer(socket, room, name) {
   sendLobby(room);
 }
 
+// ================= وضع ارسم وخمّن =================
+const WORDS = ['قطة','أسد','فيل','جمل','حصان','سمكة','ثعبان','نحلة','فراشة','دجاجة','بطريق','قرد','زرافة','تمساح','ببغاء','سلحفاة','عنكبوت','صقر','خروف','تفاحة','موزة','بطيخ','برتقال','بيتزا','برجر','كبسة','قهوة','شاي','كيكة','خبز','بيضة','جزرة','طماطم','سيارة','طيارة','دراجة','سفينة','قطار','صاروخ','شاحنة','هاتف','حاسوب','تلفاز','مفتاح','ساعة','نظارة','مظلة','كرسي','سرير','باب','نافذة','مصباح','كتاب','قلم','مقص','مطرقة','كاميرا','شمس','قمر','نجمة','سحابة','مطر','جبل','شجرة','وردة','نخلة','صحراء','بحر','نار','قلب','يد','عين','طبيب','شرطي','طباخ','ملك','روبوت','شبح','تاج','سيف','كرة قدم','جيتار','ملعقة','ثلاجة','مكيف','برج','خيمة','فانوس','عقال','دلة'];
+const norm = s => s.replace(/[\u064B-\u0652\u0640]/g, '').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/\s+/g, ' ').trim().toLowerCase();
+function lev1(a, b) {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
+}
+const board = room => { const g = room.g; return room.players.map(p => ({ id: p.id, name: p.name, pts: g.scores[p.id] || 0, ok: g.guessed.has(p.id) || p.id === g.drawer })).sort((a, b) => b.pts - a.pts); };
+const clearG = g => { clearTimeout(g.timer); g.timers.forEach(clearTimeout); g.timers = []; };
+
+function startGuess(room) {
+  room.g = { turn: 0, rounds: room.players.length <= 4 ? 2 : 1, scores: {}, guessed: new Set(), timers: [] };
+  room.players.forEach(p => room.g.scores[p.id] = 0);
+  room.phase = 'guess';
+  nextTurn(room);
+}
+function nextTurn(room) {
+  const g = room.g, n = room.players.length; clearG(g);
+  if (g.turn >= n * g.rounds) return endGuess(room);
+  const d = room.players[g.turn % n]; g.turn++;
+  if (!d.connected) return nextTurn(room);
+  Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: [...WORDS].sort(() => Math.random() - .5).slice(0, 3) });
+  io.to(room.code).emit('gturn', { drawer: d.name, drawerId: d.id, turn: g.turn, total: n * g.rounds, board: board(room) });
+  io.to(d.id).emit('gchoose', g.choices);
+  g.timer = setTimeout(() => startDraw(room, g.choices[0]), 12000);
+}
+function startDraw(room, word) {
+  const g = room.g; clearG(g);
+  g.word = word; g.stage = 'draw'; g.seconds = Math.round(80 * (room.speed || 1)); g.t0 = Date.now(); g.rev = new Set();
+  const hint = () => [...word].map((c, i) => c === ' ' ? ' ' : g.rev.has(i) ? c : '_');
+  io.to(room.code).emit('gdraw', { hint: hint(), seconds: g.seconds });
+  io.to(g.drawer).emit('gword', word);
+  [.5, .75].forEach(f => g.timers.push(setTimeout(() => {
+    const free = [...word].map((c, i) => i).filter(i => word[i] !== ' ' && !g.rev.has(i));
+    if (free.length > 2) { g.rev.add(free[Math.random() * free.length | 0]); io.to(room.code).emit('ghint', hint()); }
+  }, g.seconds * 1000 * f)));
+  g.timer = setTimeout(() => endTurn(room), g.seconds * 1000);
+}
+function endTurn(room) {
+  const g = room.g; if (g.stage !== 'draw') return;
+  clearG(g); g.stage = 'between';
+  io.to(room.code).emit('gend', { word: g.word, board: board(room) });
+  g.timer = setTimeout(() => nextTurn(room), 5000);
+}
+function endGuess(room) { room.phase = 'gover'; io.to(room.code).emit('gover', board(room)); }
+
 io.on('connection', socket => {
   socket.on('create', (name, cb) => {
     const room = { code: makeCode(), hostId: socket.id, players: [], phase: 'lobby',
@@ -94,6 +142,7 @@ io.on('connection', socket => {
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
     if (room.players.length < 2) return cb({ ok: false, error: 'تحتاج لاعبين على الأقل' });
     room.speed = { fast: 0.7, normal: 1, slow: 1.5 }[opts && opts.speed] || 1;
+    if (opts && opts.mode === 'guess') { startGuess(room); return cb({ ok: true }); }
     room.phase = 'play';
     room.round = 0;
     room.chains = room.players.map(() => []);
@@ -132,9 +181,48 @@ io.on('connection', socket => {
     if (p && ['😂', '🔥', '👏', '😱', '💀'].includes(e)) io.to(room.code).emit('react', { e, from: p.name });
   });
 
+  socket.on('gpick', w => {
+    const room = rooms.get(socket.data.code);
+    if (!room || room.phase !== 'guess') return;
+    const g = room.g;
+    if (g.stage === 'choose' && socket.id === g.drawer && g.choices.includes(w)) startDraw(room, w);
+  });
+
+  socket.on('gs', st => {
+    const room = rooms.get(socket.data.code);
+    if (!room || room.phase !== 'guess' || room.g.stage !== 'draw' || socket.id !== room.g.drawer || !st || typeof st !== 'object') return;
+    socket.to(room.code).emit('gs', st);
+  });
+
+  socket.on('guess', text => {
+    const room = rooms.get(socket.data.code);
+    if (!room || room.phase !== 'guess' || typeof text !== 'string') return;
+    const g = room.g, p = room.players.find(x => x.id === socket.id);
+    text = text.trim().slice(0, 60);
+    if (!p || !text) return;
+    const msg = { name: p.name, text };
+    if (g.stage !== 'draw' || p.id === g.drawer || g.guessed.has(p.id)) {
+      if (g.stage === 'draw') [...g.guessed, g.drawer].forEach(id => io.to(id).emit('gchat', { ...msg, priv: true }));
+      else io.to(room.code).emit('gchat', msg);
+      return;
+    }
+    const a = norm(text), b = norm(g.word);
+    if (a === b) {
+      const left = Math.max(0, (g.t0 + g.seconds * 1000 - Date.now()) / 1000);
+      const pts = Math.round(100 + 200 * left / g.seconds) + (g.guessed.size === 0 ? 30 : 0);
+      g.scores[p.id] += pts; g.scores[g.drawer] += 40; g.guessed.add(p.id);
+      io.to(p.id).emit('gok', pts);
+      io.to(room.code).emit('gchat', { name: p.name, text: 'خمّن الكلمة! 🎉', sys: true, board: board(room) });
+      if (room.players.filter(x => x.connected && x.id !== g.drawer).every(x => g.guessed.has(x.id))) endTurn(room);
+    } else {
+      if (lev1(a, b)) io.to(p.id).emit('gclose');
+      io.to(room.code).emit('gchat', msg);
+    }
+  });
+
   socket.on('restart', () => {
     const room = rooms.get(socket.data.code);
-    if (!room || room.hostId !== socket.id || room.phase !== 'reveal') return;
+    if (!room || room.hostId !== socket.id || !['reveal', 'gover'].includes(room.phase)) return;
     room.players = room.players.filter(p => p.connected);
     room.phase = 'lobby';
     sendLobby(room);
@@ -148,10 +236,15 @@ io.on('connection', socket => {
     if (room.phase === 'lobby') room.players = room.players.filter(x => x !== p);
     else p.connected = false;
     const alive = room.players.filter(x => x.connected);
-    if (!alive.length) { clearTimeout(room.timer); rooms.delete(room.code); return; }
+    if (!alive.length) { clearTimeout(room.timer); if (room.g) clearG(room.g); rooms.delete(room.code); return; }
     if (room.hostId === socket.id) { room.hostId = alive[0].id; io.to(room.code).emit('host', room.hostId); }
     if (room.phase === 'lobby') sendLobby(room);
     else if (room.phase === 'play' && alive.every(x => room.submitted.has(x.id))) endRound(room);
+    else if (room.phase === 'guess') {
+      const g = room.g;
+      if (g.stage === 'draw' && (g.drawer === socket.id || alive.filter(x => x.id !== g.drawer).every(x => g.guessed.has(x.id)))) endTurn(room);
+      else if (g.stage === 'choose' && g.drawer === socket.id) nextTurn(room);
+    }
   });
 });
 
