@@ -5,7 +5,9 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 2e6 });
-app.use(express.static('public'));
+const path = require('path');
+const FILES = ['/index.html', '/manifest.json', '/sw.js', '/icon-192.png', '/icon-512.png'];
+app.get(['/', ...FILES], (req, res) => res.sendFile(path.join(__dirname, req.path === '/' ? '/index.html' : req.path)));
 
 const rooms = new Map();
 const clean = s => String(s || '').trim().slice(0, 16) || 'لاعب';
@@ -31,7 +33,7 @@ function sendLobby(room) {
 function startRound(room) {
   const r = room.round, n = room.players.length;
   const isDraw = r % 2 === 1;
-  const seconds = r === 0 ? 45 : isDraw ? 75 : 50;
+  const seconds = Math.round((r === 0 ? 45 : isDraw ? 75 : 50) * (room.speed || 1));
   room.submitted = new Set();
   io.to(room.code).emit('progress', { done: 0, total: n });
   room.players.forEach((p, i) => {
@@ -87,10 +89,11 @@ io.on('connection', socket => {
     cb({ ok: true });
   });
 
-  socket.on('start', cb => {
+  socket.on('start', (opts, cb) => {
     const room = rooms.get(socket.data.code);
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
     if (room.players.length < 2) return cb({ ok: false, error: 'تحتاج لاعبين على الأقل' });
+    room.speed = { fast: 0.7, normal: 1, slow: 1.5 }[opts && opts.speed] || 1;
     room.phase = 'play';
     room.round = 0;
     room.chains = room.players.map(() => []);
@@ -121,6 +124,12 @@ io.on('connection', socket => {
     else if (rv.k + 1 < room.chains.length) { rv.k++; rv.i = 0; }
     else return io.to(room.code).emit('end');
     io.to(room.code).emit('step', { k: rv.k, i: rv.i });
+  });
+
+  socket.on('react', e => {
+    const room = rooms.get(socket.data.code);
+    const p = room && room.players.find(x => x.id === socket.id);
+    if (p && ['😂', '🔥', '👏', '😱', '💀'].includes(e)) io.to(room.code).emit('react', { e, from: p.name });
   });
 
   socket.on('restart', () => {
