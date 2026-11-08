@@ -98,7 +98,8 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <div class="row" id="modeBox"><button data-m="chain" class="on">🎭 تلفون مكسور</button><button data-m="guess">🎨 ارسم وخمّن</button></div>
   <p class="mut" id="modeDesc"></p>
   <div class="row" id="speedBox"><button data-s="fast">⚡ سريع</button><button data-s="normal" class="on">عادي</button><button data-s="slow">🐢 مرتاح</button></div>
-  <button id="install" hidden>📲 ثبّت اللعبة على جوالك</button>
+  <button id="install">📲 ثبّت اللعبة على جوالك</button>
+  <p class="mut" id="installHelp" hidden></p>
   <button class="go" id="start">ابدأ اللعبة</button>
   <p class="mut" id="lobbyHint"></p>
   <p class="err" id="lobbyErr"></p>
@@ -348,8 +349,16 @@ $('#invite').onclick = async () => {
   } catch {}
 };
 let deferred;
-addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; $('#install').hidden = false; });
-$('#install').onclick = () => { if (deferred) { deferred.prompt(); deferred = null; $('#install').hidden = true; } };
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; });
+if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) $('#install').hidden = true;
+$('#install').onclick = () => {
+  if (deferred) { deferred.prompt(); deferred = null; return; }
+  const ua = navigator.userAgent; let t;
+  if (/FBAN|FBAV|Instagram|Snapchat|Line\/|TikTok|musical_ly|WhatsApp/i.test(ua)) t = 'أنت فاتح اللعبة من داخل تطبيق (واتساب أو سناب...). اضغط على النقاط الثلاث فوق واختر "فتح في المتصفح"، وبعدها جرّب الزر مرة ثانية.';
+  else if (/iPhone|iPad|iPod/i.test(ua)) t = 'في الآيفون: افتح اللعبة في Safari، اضغط زر المشاركة (المربع اللي فيه سهم لفوق)، ثم اختر "إضافة إلى الشاشة الرئيسية".';
+  else t = 'في الأندرويد: افتح اللعبة في Chrome، اضغط النقاط الثلاث ⋮ فوق، ثم اختر "تثبيت التطبيق" أو "التثبيت وإنشاء اختصار" أو "إضافة إلى الشاشة الرئيسية".';
+  $('#installHelp').textContent = t; $('#installHelp').hidden = false;
+};
 const roomQ = new URLSearchParams(location.search).get('room');
 if (roomQ) $('#code').value = roomQ.toUpperCase().slice(0, 4);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
