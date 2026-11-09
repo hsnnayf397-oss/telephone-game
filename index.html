@@ -73,6 +73,17 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 .ov{position:fixed;inset:0;background:#0d0b22f0;z-index:7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;text-align:center}
 .ov[hidden]{display:none}
 .opt{font-size:26px;font-family:'Lalezar',sans-serif;min-width:220px}
+.pc{position:relative;flex:1 1 140px;max-width:calc(50% - 5px);display:flex;flex-direction:column;align-items:center;gap:5px;background:var(--card);border:3px solid #000;border-radius:18px;padding:16px 8px 10px;box-shadow:4px 4px 0 var(--line);animation:pop .4s cubic-bezier(.3,1.6,.5,1)}
+.pc.host{border-color:var(--yel);box-shadow:4px 4px 0 var(--yel)}
+.pc.me{outline:3px solid var(--cyan);outline-offset:2px}
+.pav{font-size:46px;line-height:1;width:78px;height:78px;display:grid;place-items:center;border-radius:50%;background:#171437;border:3px solid #000}
+.pn{font-family:'Lalezar',sans-serif;font-size:22px;word-break:break-word;text-align:center}
+.tag{font-size:12px;color:var(--mut);background:#171437;border-radius:99px;padding:2px 10px}
+.pc.host .tag{color:#000;background:var(--yel);font-weight:600}
+.crown{position:absolute;top:-17px;font-size:28px;filter:drop-shadow(0 2px 0 #000)}
+.kick{position:absolute;top:6px;inset-inline-start:6px;padding:2px 8px;font-size:12px;box-shadow:0 2px 0 #000;background:#3a1730;color:#ff8fa3}
+.small{padding:6px 12px;font-size:14px;flex:none}
+.toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--yel);color:#000;border:3px solid #000;border-radius:14px;padding:10px 16px;font-weight:600;z-index:20;animation:pop .4s;max-width:90vw;text-align:center}
 </style>
 </head>
 <body>
@@ -91,7 +102,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 </section>
 
 <section class="screen" id="lobby" hidden>
-  <h2>شارك الرمز مع أصحابك</h2>
+  <div class="bar"><h2>شارك الرمز مع أصحابك</h2><button id="leave" class="small">🚪 اخرج</button></div>
   <div class="code" id="lobbyCode"></div>
   <div class="pl" id="players"></div>
   <div class="row"><button id="invite">📨 ادعُ أصحابك</button><button id="mute">🔊 الصوت</button></div>
@@ -182,16 +193,34 @@ $('#join').onclick = () => enter('join', { name: $('#name').value, code: $('#cod
 socket.on('lobby', d => {
   show('lobby'); hostId = d.hostId; avMap = {};
   $('#lobbyCode').textContent = d.code;
-  $('#players').replaceChildren(...d.players.map((n, i) => {
-    avMap[n] = AV[i % AV.length];
-    const c = el('div', 'chip'); c.append(el('b', '', avMap[n]), el('span', '', n)); return c;
+  $('#players').replaceChildren(...d.players.map(p => {
+    avMap[p.name] = p.av;
+    const host = p.id === d.hostId, me = p.id === socket.id;
+    const c = el('div', 'pc' + (host ? ' host' : '') + (me ? ' me' : ''));
+    if (host) c.append(el('span', 'crown', '👑'));
+    c.append(el('div', 'pav', p.av), el('div', 'pn', p.name), el('div', 'tag', host ? (me ? 'أنت القائد' : 'قائد الغرفة') : me ? 'أنت' : 'لاعب'));
+    if (socket.id === d.hostId && !me) {
+      const k = el('button', 'kick', '✖'); k.setAttribute('aria-label', 'اطرد ' + p.name);
+      k.onclick = () => { if (confirm(`تبي تطرد ${p.name}؟`)) socket.emit('kick', p.id); };
+      c.append(k);
+    }
+    return c;
   }));
   $('#start').hidden = !amHost(); $('#speedBox').hidden = !amHost(); $('#modeBox').hidden = !amHost(); $('#modeDesc').hidden = !amHost();
   $('#lobbyHint').textContent = amHost() ? 'الأفضل 4 لاعبين أو أكثر، وكل ما زادوا صارت أضحك.' : 'ننتظر المضيف يبدأ اللعبة…';
   beep(660, .1);
 });
 $('#start').onclick = () => socket.emit('start', { speed, mode }, r => { if (!r.ok) $('#lobbyErr').textContent = r.error; });
-socket.on('host', id => { hostId = id; syncReveal(); });
+socket.on('host', ({ id, name }) => {
+  hostId = id; syncReveal();
+  toast(id === socket.id ? 'أنت الحين قائد الغرفة 👑' : `👑 ${name} صار قائد الغرفة`);
+});
+function toast(msg) { const t = el('div', 'toast', msg); document.body.append(t); setTimeout(() => t.remove(), 3800); }
+$('#leave').onclick = () => {
+  if (!confirm('تبي تطلع من الغرفة؟')) return;
+  socket.emit('leave'); hostId = null; $('#homeErr').textContent = ''; show('home');
+};
+socket.on('kicked', () => { hostId = null; show('home'); $('#homeErr').textContent = 'القائد طردك من الغرفة'; });
 
 // ---------- لوحة الرسم ----------
 const cv = $('#cv'), ctx = cv.getContext('2d');

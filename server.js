@@ -10,6 +10,7 @@ const FILES = ['/index.html', '/manifest.json', '/sw.js', '/icon-192.png', '/ico
 app.get(['/', ...FILES], (req, res) => res.sendFile(path.join(__dirname, req.path === '/' ? '/index.html' : req.path)));
 
 const rooms = new Map();
+const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
 const clean = s => String(s || '').trim().slice(0, 16) || 'لاعب';
 const makeCode = () => {
   const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -26,7 +27,7 @@ function sendLobby(room) {
   io.to(room.code).emit('lobby', {
     code: room.code,
     hostId: room.hostId,
-    players: room.players.map(p => p.name),
+    players: room.players.map(p => ({ id: p.id, name: p.name, av: p.av })),
   });
 }
 
@@ -65,7 +66,8 @@ function endRound(room) {
 }
 
 function addPlayer(socket, room, name) {
-  room.players.push({ id: socket.id, name, connected: true });
+  const used = new Set(room.players.map(p => p.av));
+  room.players.push({ id: socket.id, name, connected: true, av: AV.find(a => !used.has(a)) || AV[0] });
   socket.join(room.code);
   socket.data.code = room.code;
   sendLobby(room);
@@ -220,6 +222,17 @@ io.on('connection', socket => {
     }
   });
 
+  socket.on('kick', id => {
+    const room = rooms.get(socket.data.code);
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby' || id === socket.id) return;
+    const p = room.players.find(x => x.id === id);
+    if (!p) return;
+    room.players = room.players.filter(x => x !== p);
+    const t = io.sockets.sockets.get(id);
+    if (t) { t.leave(room.code); t.data.code = null; t.emit('kicked'); }
+    sendLobby(room);
+  });
+
   socket.on('restart', () => {
     const room = rooms.get(socket.data.code);
     if (!room || room.hostId !== socket.id || !['reveal', 'gover'].includes(room.phase)) return;
@@ -228,7 +241,7 @@ io.on('connection', socket => {
     sendLobby(room);
   });
 
-  socket.on('disconnect', () => {
+  const drop = () => {
     const room = rooms.get(socket.data.code);
     if (!room) return;
     const p = room.players.find(x => x.id === socket.id);
@@ -237,7 +250,7 @@ io.on('connection', socket => {
     else p.connected = false;
     const alive = room.players.filter(x => x.connected);
     if (!alive.length) { clearTimeout(room.timer); if (room.g) clearG(room.g); rooms.delete(room.code); return; }
-    if (room.hostId === socket.id) { room.hostId = alive[0].id; io.to(room.code).emit('host', room.hostId); }
+    if (room.hostId === socket.id) { const nh = alive[Math.random() * alive.length | 0]; room.hostId = nh.id; io.to(room.code).emit('host', { id: nh.id, name: nh.name }); }
     if (room.phase === 'lobby') sendLobby(room);
     else if (room.phase === 'play' && alive.every(x => room.submitted.has(x.id))) endRound(room);
     else if (room.phase === 'guess') {
@@ -245,6 +258,13 @@ io.on('connection', socket => {
       if (g.stage === 'draw' && (g.drawer === socket.id || alive.filter(x => x.id !== g.drawer).every(x => g.guessed.has(x.id)))) endTurn(room);
       else if (g.stage === 'choose' && g.drawer === socket.id) nextTurn(room);
     }
+  };
+  socket.on('disconnect', drop);
+  socket.on('leave', () => {
+    const code = socket.data.code;
+    if (code) socket.leave(code);
+    drop();
+    socket.data.code = null;
   });
 });
 
