@@ -12,7 +12,7 @@
 <style>
 :root{color-scheme:dark;--bg:#13112b;--card:#201c48;--ink:#f6f3ff;--pink:#ff4d94;--yel:#ffd23f;--cyan:#35e0ff;--line:#4a4496;--mut:#a9a4d8}
 *{box-sizing:border-box}
-body{margin:0;color:var(--ink);font-family:'IBM Plex Sans Arabic',Tahoma,sans-serif;min-height:100vh;
+body{margin:0;color:var(--ink);font-family:'IBM Plex Sans Arabic',Tahoma,sans-serif;min-height:100vh;min-height:100dvh;
 background:radial-gradient(circle at 85% 0,#2d1f6e 0,transparent 45%),radial-gradient(#2a2660 1.5px,transparent 1.5px) 0 0/26px 26px,var(--bg)}
 .screen{max-width:560px;margin:0 auto;padding:26px 16px 60px;display:flex;flex-direction:column;gap:14px}
 .screen[hidden]{display:none}
@@ -484,6 +484,15 @@ socket.on('gover', list => {
   if (amHost()) { const again = el('button', 'go', 'العب مرة ثانية'); again.onclick = () => socket.emit('restart'); nodes.push(again); }
   else nodes.push(el('p', 'mut', 'ننتظر المضيف…'));
   ov(...nodes); confetti();
+});
+
+// حل مشكلة تغطية كيبورد الجوال لخانة الكتابة تلقائياً
+document.querySelectorAll('input').forEach(input => {
+  input.addEventListener('focus', () => {
+    setTimeout(() => {
+      input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  });
 });
 </script>
 </body>
