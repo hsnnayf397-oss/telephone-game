@@ -101,7 +101,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <input id="name" placeholder="اسمك" maxlength="16" autocomplete="off">
   <button class="go" id="create">سوّ غرفة جديدة</button>
   <div class="row">
-    <input id="code" placeholder="رمز الغرفة" maxlength="4" style="direction:ltr;text-transform:uppercase">
+    <input id="code" placeholder="رمز الغرفة" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" style="direction:ltr">
     <button id="join">ادخل الغرفة</button>
   </div>
   <p class="err" id="homeErr"></p>

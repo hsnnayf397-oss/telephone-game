@@ -13,10 +13,8 @@ const rooms = new Map();
 const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
 const clean = s => String(s || '').trim().slice(0, 16) || 'لاعب';
 const makeCode = () => {
-  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   let code;
-  do { code = Array.from({ length: 4 }, () => c[Math.floor(Math.random() * c.length)]).join(''); }
-  while (rooms.has(code));
+  do { code = String(1000 + Math.floor(Math.random() * 9000)); } while (rooms.has(code));
   return code;
 };
 
@@ -141,7 +139,7 @@ io.on('connection', socket => {
   });
 
   socket.on('join', ({ name, code }, cb) => {
-    const room = rooms.get(String(code || '').toUpperCase().trim());
+    const room = rooms.get(String(code || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g, ''));
     if (!room) return cb({ ok: false, error: 'الغرفة غير موجودة' });
     if (room.phase !== 'lobby') return cb({ ok: false, error: 'اللعبة بدأت' });
     if (room.players.length >= 12) return cb({ ok: false, error: 'الغرفة ممتلئة' });
