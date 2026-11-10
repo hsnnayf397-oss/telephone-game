@@ -478,9 +478,14 @@ socket.on('gchat', m => {
   const d = el('div', m.sys ? 'sys' : m.priv ? 'priv' : '');
   if (m.sys) d.textContent = `${m.name} ${m.text}`; else { d.append(el('b', '', m.name + ': '), document.createTextNode(m.text)); }
   const c = $('#gchat'); c.append(d); c.scrollTop = c.scrollHeight;
-  if (m.board) { gBoard(m.board); beep(880, .1); }
+  if (m.board) { gBoard(m.board); if (Date.now() - myOk > 800) ding(); }
 });
-socket.on('gok', p => { $('#gin').placeholder = `صح! +${p} نقطة 🎉`; });
+let myOk = 0;
+const ding = () => { beep(880, .12, 'sine'); setTimeout(() => beep(1318, .25, 'sine'), 110); };
+socket.on('gok', p => {
+  myOk = Date.now(); $('#gin').placeholder = `صح! +${p} نقطة 🎉`;
+  [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, .2, 'sine'), i * 90));
+});
 socket.on('gclose', () => { $('#gchat').append(el('div', 'sys', 'قريب جدًا! 🔥')); });
 $('#gin').addEventListener('keydown', e => { if (e.key === 'Enter') { const v = $('#gin').value.trim(); if (v) socket.emit('guess', v); $('#gin').value = ''; } });
 // الكيبورد: نصغّر الشاشة على المساحة المرئية بس عشان الرسمة والشات يبقون ظاهرين
