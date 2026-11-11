@@ -128,6 +128,15 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <div class="row"><button id="invite">📨 ادعُ أصحابك</button><button id="mute">🔊 الصوت</button></div>
   <div class="row" id="modeBox"><button data-m="chain" class="on">🎭 تلفون مكسور</button><button data-m="guess">🎨 ارسم وخمّن</button></div>
   <p class="mut" id="modeDesc"></p>
+  <div id="targetBox" hidden>
+    <p class="mut">🏆 نقاط الفوز: أول واحد يوصلها يكسب</p>
+    <div class="row">
+      <button data-t="500">500<br><small>قصيرة</small></button>
+      <button data-t="1000" class="on">1000<br><small>متوسطة</small></button>
+      <button data-t="1500">1500<br><small>طويلة</small></button>
+      <button data-t="2000">2000<br><small>ماراثون</small></button>
+    </div>
+  </div>
   <div class="row" id="speedBox"><button data-s="fast">⚡ سريع</button><button data-s="normal" class="on">عادي</button><button data-s="slow">🐢 مرتاح</button></div>
   <button id="install">📲 ثبّت اللعبة على جوالك</button>
   <p class="mut" id="installHelp" hidden></p>
@@ -177,7 +186,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 <div class="load" id="loadov" hidden>
   <div class="bgfx" aria-hidden="true"><span>🎨</span><span>✏️</span><span>🖌️</span><span>🎭</span><span>❓</span><span>💡</span><span>🖍️</span><span>⭐</span></div>
   <h1>ارسم وخمّن</h1>
-  <p class="mut">جاري تجهيز اللعبة…</p>
+  <p class="mut" id="lsub">جاري تجهيز اللعبة…</p>
   <div class="lpb"><i id="lbar"></i></div>
   <div class="big" id="lpct">0%</div>
   <div class="tipcard"><small>💡 نصيحة</small><div id="ltip"></div></div>
@@ -235,11 +244,11 @@ socket.on('lobby', d => {
     }
     return c;
   }));
-  $('#start').hidden = !amHost(); $('#speedBox').hidden = !amHost(); $('#modeBox').hidden = !amHost(); $('#modeDesc').hidden = !amHost();
+  $('#start').hidden = !amHost(); $('#speedBox').hidden = !amHost(); $('#modeBox').hidden = !amHost(); $('#modeDesc').hidden = !amHost(); $('#targetBox').hidden = !amHost() || mode !== 'guess';
   $('#lobbyHint').textContent = amHost() ? 'الأفضل 4 لاعبين أو أكثر، وكل ما زادوا صارت أضحك.' : 'ننتظر المضيف يبدأ اللعبة…';
   beep(660, .1);
 });
-$('#start').onclick = () => socket.emit('start', { speed, mode }, r => { if (!r.ok) $('#lobbyErr').textContent = r.error; });
+$('#start').onclick = () => socket.emit('start', { speed, mode, target }, r => { if (!r.ok) $('#lobbyErr').textContent = r.error; });
 socket.on('host', ({ id, name }) => {
   hostId = id; syncReveal();
   toast(id === socket.id ? 'أنت الحين قائد الغرفة 👑' : `👑 ${name} صار قائد الغرفة`);
@@ -428,11 +437,15 @@ socket.on('react', ({ e, from }) => {
 
 // ---------- اختيار الوضع ----------
 let mode = 'chain';
-const MODE_DESC = { chain: 'اكتب ← ارسم ← وصف، وشوف الفكرة كيف تتخربط.', guess: 'واحد يرسم والباقي يخمّنون الكلمة، وأسرع واحد ياخذ نقاط أكثر.' };
+const MODE_DESC = { chain: 'اكتب ← ارسم ← وصف، وشوف الفكرة كيف تتخربط.', guess: 'واحد يرسم والباقي يخمّنون الكلمة، وأسرع واحد ياخذ نقاط أكثر، وأول واحد يوصل نقاط الفوز يكسب.' };
 document.querySelectorAll('#modeBox button').forEach(b => b.onclick = () => {
-  mode = b.dataset.m; document.querySelectorAll('#modeBox button').forEach(x => x.classList.toggle('on', x === b)); $('#modeDesc').textContent = MODE_DESC[mode];
+  mode = b.dataset.m; document.querySelectorAll('#modeBox button').forEach(x => x.classList.toggle('on', x === b)); $('#modeDesc').textContent = MODE_DESC[mode]; $('#targetBox').hidden = !amHost() || mode !== 'guess';
 });
 $('#modeDesc').textContent = MODE_DESC.chain;
+let target = 1000;
+document.querySelectorAll('#targetBox button').forEach(b => b.onclick = () => {
+  target = +b.dataset.t; document.querySelectorAll('#targetBox button').forEach(x => x.classList.toggle('on', x === b));
+});
 
 // ---------- وضع ارسم وخمّن ----------
 const gcv = $('#gcv'), gx = gcv.getContext('2d'), gov = $('#gov');
@@ -484,7 +497,7 @@ function startG(sec) {
 }
 socket.on('gturn', d => {
   show('guess'); clearInterval(gTick); gDrawer = d.drawerId === socket.id; gClear();
-  $('#gInfo').textContent = `الدور ${d.turn} من ${d.total}`; $('#gHint').textContent = ''; $('#gTimer').textContent = ''; $('#gtools').hidden = true;
+  $('#gInfo').textContent = `الدور ${d.turn} • الهدف ${d.target} نقطة`; $('#gHint').textContent = ''; $('#gTimer').textContent = ''; $('#gtools').hidden = true;
   $('#gin').disabled = gDrawer; $('#gin').placeholder = gDrawer ? 'أنت الرسام' : 'اكتب تخمينك…';
   gBoard(d.board); $('#gchat').replaceChildren();
   if (gDrawer) ov(); else ov(el('h2', '', `${d.drawer} يختار كلمة…`), el('p', 'mut', 'استعد تخمّن!'));
@@ -517,8 +530,8 @@ const TIPS = [
   'لا تقول الجواب للي يخمّن وأنت الرسام، خل الرسمة تتكلم! 😄',
   'ما تعرف ترسم؟ ولا يهمك، الرسمة السيئة هي اللي تضحّك الكل.'
 ];
-socket.on('gload', ({ ms }) => {
-  show('guess'); $('#loadov').hidden = false;
+socket.on('gload', ({ ms, target: tg }) => {
+  show('guess'); $('#loadov').hidden = false; $('#lsub').textContent = `الهدف: ${tg} نقطة 🏆 • جاري تجهيز اللعبة…`;
   const tips = [...TIPS].sort(() => Math.random() - .5), t0 = Date.now(); let k = -1;
   const upd = () => {
     const dt = Date.now() - t0, p = Math.min(100, Math.round(dt / ms * 100));

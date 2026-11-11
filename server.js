@@ -93,20 +93,20 @@ function lev1(a, b) {
 const board = room => { const g = room.g; return room.players.map(p => ({ id: p.id, name: p.name, pts: g.scores[p.id] || 0, ok: g.guessed.has(p.id) || p.id === g.drawer })).sort((a, b) => b.pts - a.pts); };
 const clearG = g => { clearTimeout(g.timer); g.timers.forEach(clearTimeout); g.timers = []; };
 
-function startGuess(room) {
-  room.g = { turn: 0, rounds: room.players.length <= 4 ? 2 : 1, scores: {}, guessed: new Set(), timers: [], used: new Set() };
+function startGuess(room, target) {
+  room.g = { turn: 0, target, scores: {}, guessed: new Set(), timers: [], used: new Set() };
   room.players.forEach(p => room.g.scores[p.id] = 0);
   room.phase = 'guess'; room.g.stage = 'loading';
-  io.to(room.code).emit('gload', { ms: 15000 });
+  io.to(room.code).emit('gload', { ms: 15000, target });
   room.g.timer = setTimeout(() => nextTurn(room), 15000);
 }
 function nextTurn(room) {
   const g = room.g, n = room.players.length; clearG(g);
-  if (g.turn >= n * g.rounds) return endGuess(room);
+  if (g.turn >= n * 6 || Object.values(g.scores).some(v => v >= g.target)) return endGuess(room);
   const d = room.players[g.turn % n]; g.turn++;
   if (!d.connected) return nextTurn(room);
   Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: pickWords(g) });
-  io.to(room.code).emit('gturn', { drawer: d.name, drawerId: d.id, turn: g.turn, total: n * g.rounds, board: board(room) });
+  io.to(room.code).emit('gturn', { drawer: d.name, drawerId: d.id, turn: g.turn, target: g.target, board: board(room) });
   io.to(d.id).emit('gchoose', g.choices);
   g.timer = setTimeout(() => startDraw(room, g.choices[0]), 12000);
 }
@@ -153,7 +153,7 @@ io.on('connection', socket => {
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
     if (room.players.length < 2) return cb({ ok: false, error: 'تحتاج لاعبين على الأقل' });
     room.speed = { fast: 0.7, normal: 1, slow: 1.5 }[opts && opts.speed] || 1;
-    if (opts && opts.mode === 'guess') { startGuess(room); return cb({ ok: true }); }
+    if (opts && opts.mode === 'guess') { startGuess(room, [500, 1000, 1500, 2000].includes(opts.target) ? opts.target : 1000); return cb({ ok: true }); }
     room.phase = 'play';
     room.round = 0;
     room.chains = room.players.map(() => []);
