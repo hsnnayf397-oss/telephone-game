@@ -90,6 +90,20 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 #guess.kb #gcv{width:auto;height:34%;aspect-ratio:4/3;align-self:center}
 #guess.kb .gwrap{flex:1 1 0;min-height:0;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr)}
 #guess.kb .chat{height:auto;min-height:0}
+.load{position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;overflow:hidden;background:radial-gradient(circle at 20% 15%,#4a1d8f 0,transparent 45%),radial-gradient(circle at 85% 90%,#8a1c5c 0,transparent 45%),#0f0d26}
+.load[hidden]{display:none}
+.load>*{position:relative}
+.bgfx{position:absolute!important;inset:0;pointer-events:none}
+.bgfx span{position:absolute;bottom:-70px;font-size:42px;opacity:.35;animation:rise 9s linear infinite}
+.bgfx span:nth-child(1){left:6%}.bgfx span:nth-child(2){left:18%;animation-delay:1.2s}.bgfx span:nth-child(3){left:30%;animation-delay:2.4s}.bgfx span:nth-child(4){left:42%;animation-delay:.6s}
+.bgfx span:nth-child(5){left:54%;animation-delay:1.8s}.bgfx span:nth-child(6){left:66%;animation-delay:3s}.bgfx span:nth-child(7){left:78%;animation-delay:.3s}.bgfx span:nth-child(8){left:90%;animation-delay:2.1s}
+@keyframes rise{to{transform:translateY(-115vh) rotate(25deg)}}
+.lpb{width:min(440px,86vw);height:26px;background:#171437;border:3px solid #000;border-radius:99px;overflow:hidden;box-shadow:0 4px 0 #000}
+.lpb i{display:block;height:100%;width:0;background:repeating-linear-gradient(45deg,var(--cyan) 0 14px,#7df0ff 14px 28px);transition:width .15s linear}
+#lpct{font-size:56px;line-height:1}
+.tipcard{width:min(440px,86vw);min-height:116px;background:var(--card);border:3px solid #000;border-radius:18px;box-shadow:5px 5px 0 var(--yel);padding:14px;display:flex;flex-direction:column;gap:6px;justify-content:center}
+.tipcard small{color:var(--yel);font-weight:600}
+#ltip{font-size:19px;line-height:1.6;animation:pop .45s}
 </style>
 </head>
 <body>
@@ -160,11 +174,20 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <input id="gin" maxlength="60" placeholder="اكتب تخمينك…" autocomplete="off">
   <div class="ov" id="gov" hidden></div>
 </section>
+<div class="load" id="loadov" hidden>
+  <div class="bgfx" aria-hidden="true"><span>🎨</span><span>✏️</span><span>🖌️</span><span>🎭</span><span>❓</span><span>💡</span><span>🖍️</span><span>⭐</span></div>
+  <h1>ارسم وخمّن</h1>
+  <p class="mut">جاري تجهيز اللعبة…</p>
+  <div class="lpb"><i id="lbar"></i></div>
+  <div class="big" id="lpct">0%</div>
+  <div class="tipcard"><small>💡 نصيحة</small><div id="ltip"></div></div>
+</div>
 <div class="rx" id="rx" hidden><button>😂</button><button>🔥</button><button>👏</button><button>😱</button><button>💀</button></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const socket = io(), $ = s => document.querySelector(s);
-const show = id => { document.querySelectorAll('.screen').forEach(e => e.hidden = e.id !== id); $('#rx').hidden = id !== 'reveal'; if (id !== 'guess') $('#gov').hidden = true; };
+let loadT = null;
+const show = id => { document.querySelectorAll('.screen').forEach(e => e.hidden = e.id !== id); $('#rx').hidden = id !== 'reveal'; if (id !== 'guess') $('#gov').hidden = true; $('#loadov').hidden = true; clearInterval(loadT); };
 const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
 let hostId = null, avMap = {}, chains = [];
 const amHost = () => socket.id === hostId;
@@ -479,6 +502,32 @@ socket.on('gchat', m => {
   if (m.sys) d.textContent = `${m.name} ${m.text}`; else { d.append(el('b', '', m.name + ': '), document.createTextNode(m.text)); }
   const c = $('#gchat'); c.append(d); c.scrollTop = c.scrollHeight;
   if (m.board) { gBoard(m.board); if (Date.now() - myOk > 800) ding(); }
+});
+const TIPS = [
+  'ابدأ بالأشكال الكبيرة والواضحة، التفاصيل الصغيرة تضيع على اللي يخمّن.',
+  'أسرع تخمين ياخذ نقاط أكثر، وأول واحد يجاوب ياخذ مكافأة زيادة. لا تتردد!',
+  'الرسام ياخذ نقاط على كل واحد يخمّن رسمته، فارسم بوضوح عشان الكل يلقطها.',
+  'تابع الحروف اللي تظهر فوق الرسمة، كل شوي ينكشف حرف جديد يقرّبك من الكلمة.',
+  'كتبت كلمة قريبة؟ بيطلع لك "قريب جدًا 🔥"، عدّل عليها وجرّب مرة ثانية.',
+  'إذا جاك ثلاث كلمات صعبة، اختر اللي تعرف ترسمها بأسهل شكل.',
+  'استخدم 🪣 التعبئة لتلوين مساحة كبيرة بضغطة وحدة بدل ما تتعب إيدك.',
+  'لو خمّنت الكلمة صح، تقدر تسولف مع اللي خمّنوا بدون ما تفسد على الباقي.',
+  'الألوان تساعد! الموزة صفراء والبحر أزرق، واللون الصح يقرّب التخمين بنص الطريق.',
+  'اللعبة أحلى بأربعة لاعبين أو أكثر، وكل ما زادوا صارت الضحكة أكبر.',
+  'لا تقول الجواب للي يخمّن وأنت الرسام، خل الرسمة تتكلم! 😄',
+  'ما تعرف ترسم؟ ولا يهمك، الرسمة السيئة هي اللي تضحّك الكل.'
+];
+socket.on('gload', ({ ms }) => {
+  show('guess'); $('#loadov').hidden = false;
+  const tips = [...TIPS].sort(() => Math.random() - .5), t0 = Date.now(); let k = -1;
+  const upd = () => {
+    const dt = Date.now() - t0, p = Math.min(100, Math.round(dt / ms * 100));
+    $('#lpct').textContent = p + '%'; $('#lbar').style.width = p + '%';
+    const n = Math.min(Math.floor(dt / 5000), tips.length - 1);
+    if (n !== k) { k = n; const tc = $('#ltip'); tc.textContent = tips[n]; tc.style.animation = 'none'; void tc.offsetHeight; tc.style.animation = ''; beep(660, .08, 'sine'); }
+    if (p >= 100) clearInterval(loadT);
+  };
+  upd(); loadT = setInterval(upd, 100);
 });
 let myOk = 0;
 const ding = () => { beep(880, .12, 'sine'); setTimeout(() => beep(1318, .25, 'sine'), 110); };

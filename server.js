@@ -96,8 +96,9 @@ const clearG = g => { clearTimeout(g.timer); g.timers.forEach(clearTimeout); g.t
 function startGuess(room) {
   room.g = { turn: 0, rounds: room.players.length <= 4 ? 2 : 1, scores: {}, guessed: new Set(), timers: [], used: new Set() };
   room.players.forEach(p => room.g.scores[p.id] = 0);
-  room.phase = 'guess';
-  nextTurn(room);
+  room.phase = 'guess'; room.g.stage = 'loading';
+  io.to(room.code).emit('gload', { ms: 15000 });
+  room.g.timer = setTimeout(() => nextTurn(room), 15000);
 }
 function nextTurn(room) {
   const g = room.g, n = room.players.length; clearG(g);
