@@ -136,6 +136,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
       <button data-t="1500">1500<br><small>طويلة</small></button>
       <button data-t="2000">2000<br><small>ماراثون</small></button>
     </div>
+    <p class="mut" id="ptsInfo">كل إجابة صح = 100 نقطة</p>
   </div>
   <div class="row" id="speedBox"><button data-s="fast">⚡ سريع</button><button data-s="normal" class="on">عادي</button><button data-s="slow">🐢 مرتاح</button></div>
   <button id="install">📲 ثبّت اللعبة على جوالك</button>
@@ -444,7 +445,7 @@ document.querySelectorAll('#modeBox button').forEach(b => b.onclick = () => {
 $('#modeDesc').textContent = MODE_DESC.chain;
 let target = 1000;
 document.querySelectorAll('#targetBox button').forEach(b => b.onclick = () => {
-  target = +b.dataset.t; document.querySelectorAll('#targetBox button').forEach(x => x.classList.toggle('on', x === b));
+  target = +b.dataset.t; document.querySelectorAll('#targetBox button').forEach(x => x.classList.toggle('on', x === b)); $('#ptsInfo').textContent = `كل إجابة صح = ${target / 10} نقطة`;
 });
 
 // ---------- وضع ارسم وخمّن ----------

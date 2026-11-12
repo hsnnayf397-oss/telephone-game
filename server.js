@@ -102,7 +102,7 @@ function startGuess(room, target) {
 }
 function nextTurn(room) {
   const g = room.g, n = room.players.length; clearG(g);
-  if (g.turn >= n * 6 || Object.values(g.scores).some(v => v >= g.target)) return endGuess(room);
+  if (Object.values(g.scores).some(v => v >= g.target)) return endGuess(room);
   const d = room.players[g.turn % n]; g.turn++;
   if (!d.connected) return nextTurn(room);
   Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: pickWords(g) });
@@ -219,9 +219,8 @@ io.on('connection', socket => {
     }
     const a = norm(text), b = norm(g.word);
     if (a === b) {
-      const left = Math.max(0, (g.t0 + g.seconds * 1000 - Date.now()) / 1000);
-      const pts = Math.round(100 + 200 * left / g.seconds) + (g.guessed.size === 0 ? 30 : 0);
-      g.scores[p.id] += pts; g.scores[g.drawer] += 40; g.guessed.add(p.id);
+      const pts = g.target / 10;
+      g.scores[p.id] += pts; g.scores[g.drawer] += pts / 2; g.guessed.add(p.id);
       io.to(p.id).emit('gok', pts);
       io.to(room.code).emit('gchat', { name: p.name, text: 'خمّن الكلمة! 🎉', sys: true, board: board(room) });
       if (room.players.filter(x => x.connected && x.id !== g.drawer).every(x => g.guessed.has(x.id))) endTurn(room);
