@@ -104,6 +104,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 .tipcard{width:min(440px,86vw);min-height:116px;background:var(--card);border:3px solid #000;border-radius:18px;box-shadow:5px 5px 0 var(--yel);padding:14px;display:flex;flex-direction:column;gap:6px;justify-content:center}
 .tipcard small{color:var(--yel);font-weight:600}
 #ltip{font-size:19px;line-height:1.6;animation:pop .45s}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -450,7 +451,7 @@ document.querySelectorAll('#targetBox button').forEach(b => b.onclick = () => {
 
 // ---------- وضع ارسم وخمّن ----------
 const gcv = $('#gcv'), gx = gcv.getContext('2d'), gov = $('#gov');
-let gDrawer = false, gcolor = '#000000', gsize = 8, gtool = 'pen', gdown = false, glast = null, gTick = null;
+let gDrawer = false, gcolor = '#000000', gsize = 8, gtool = 'pen', gdown = false, glast = null, gTick = null, gCd = null;
 gx.lineCap = gx.lineJoin = 'round';
 const ov = (...nodes) => { gov.replaceChildren(...nodes); gov.hidden = !nodes.length; };
 const gClear = () => { gx.fillStyle = '#fff'; gx.fillRect(0, 0, 640, 480); };
@@ -481,7 +482,7 @@ function gTools() {
   });
   [['fill', '🪣'], ['eraser', '🧽']].forEach(([t, l]) => { const x = el('button', 'tool' + (gtool === t ? ' on' : ''), l); x.onclick = () => { gtool = t; gTools(); }; b.append(x); });
   const r = el('input'); r.type = 'range'; r.min = 2; r.max = 44; r.value = gsize; r.oninput = () => gsize = +r.value;
-  const w = el('button', 'tool', '🗑️'); w.onclick = () => { gClear(); socket.emit('gs', { t: 'c' }); };
+  const w = el('button', 'tool', '🗑️'); w.onclick = () => { if (!gDrawer) return; gClear(); socket.emit('gs', { t: 'c' }); };
   b.append(r, w);
 }
 const gBoard = list => $('#gboard').replaceChildren(...list.map(p => {
@@ -498,17 +499,20 @@ function startG(sec) {
 }
 socket.on('gturn', d => {
   show('guess'); clearInterval(gTick); gDrawer = d.drawerId === socket.id; gClear();
-  $('#gInfo').textContent = `الدور ${d.turn} • الهدف ${d.target} نقطة`; $('#gHint').textContent = ''; $('#gTimer').textContent = ''; $('#gtools').hidden = true;
+  $('#gInfo').textContent = `الدور ${d.turn} • الهدف ${d.target} نقطة`; $('#gHint').textContent = ''; $('#gTimer').textContent = ''; $('#gtools').hidden = true; $('#gtools').replaceChildren();
   $('#gin').disabled = gDrawer; $('#gin').placeholder = gDrawer ? 'أنت الرسام' : 'اكتب تخمينك…';
   gBoard(d.board); $('#gchat').replaceChildren();
   if (gDrawer) ov(); else ov(el('h2', '', `${d.drawer} يختار كلمة…`), el('p', 'mut', 'استعد تخمّن!'));
 });
 socket.on('gchoose', ws => {
   const nodes = [el('h2', '', 'اختر كلمة وارسمها')];
-  ws.forEach(w => { const b = el('button', 'go opt', w); b.onclick = () => { socket.emit('gpick', w); ov(); }; nodes.push(b); });
+  ws.forEach(w => { const b = el('button', 'go opt', w); b.onclick = () => { clearInterval(gCd); socket.emit('gpick', w); ov(); }; nodes.push(b); });
+  const cd = el('p', 'mut', 'عندك 15 ثانية تفكر وتختار'); nodes.push(cd);
+  clearInterval(gCd); let left = 15;
+  gCd = setInterval(() => { left--; cd.textContent = left > 0 ? `باقي ${left} ثانية` : 'خلص الوقت…'; if (left <= 0) clearInterval(gCd); }, 1000);
   ov(...nodes);
 });
-socket.on('gdraw', d => { ov(); gHint(d.hint); startG(d.seconds); if (gDrawer) { gTools(); $('#gtools').hidden = false; } });
+socket.on('gdraw', d => { clearInterval(gCd); ov(); gHint(d.hint); startG(d.seconds); if (gDrawer) { gTools(); $('#gtools').hidden = false; } });
 socket.on('gword', w => { $('#gHint').textContent = w; });
 socket.on('ghint', gHint);
 socket.on('gchat', m => {
@@ -560,7 +564,7 @@ if (window.visualViewport) visualViewport.addEventListener('resize', () => {
 });
 $('#gin').addEventListener('focus', () => { setVh(); gscr.classList.add('kb'); setTimeout(() => { setVh(); scrollTo(0, 0); }, 300); });
 $('#gin').addEventListener('blur', () => gscr.classList.remove('kb'));
-socket.on('gend', d => { clearInterval(gTick); gDrawer = false; $('#gtools').hidden = true; gBoard(d.board); ov(el('p', 'mut', 'الكلمة كانت'), el('h1', '', d.word)); });
+socket.on('gend', d => { clearInterval(gTick); gDrawer = false; $('#gtools').hidden = true; $('#gtools').replaceChildren(); gBoard(d.board); ov(el('p', 'mut', 'الكلمة كانت'), el('h1', '', d.word)); });
 socket.on('gover', list => {
   clearInterval(gTick); const medals = ['🥇', '🥈', '🥉'], nodes = [el('h1', '', 'النتيجة النهائية 🏆')];
   list.forEach((p, i) => nodes.push(el('div', 'chip', `${medals[i] || ''} ${avMap[p.name] || ''} ${p.name} — ${p.pts}`)));

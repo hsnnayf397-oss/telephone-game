@@ -108,7 +108,7 @@ function nextTurn(room) {
   Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: pickWords(g) });
   io.to(room.code).emit('gturn', { drawer: d.name, drawerId: d.id, turn: g.turn, target: g.target, board: board(room) });
   io.to(d.id).emit('gchoose', g.choices);
-  g.timer = setTimeout(() => startDraw(room, g.choices[0]), 12000);
+  g.timer = setTimeout(() => startDraw(room, g.choices[0]), 15000);
 }
 function startDraw(room, word) {
   const g = room.g; clearG(g);
