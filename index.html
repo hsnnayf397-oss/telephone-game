@@ -106,6 +106,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 #ltip{font-size:19px;line-height:1.6;animation:pop .45s}
 [hidden]{display:none!important}
 .box b{font-family:'Lalezar',sans-serif;font-size:30px;color:var(--yel)}
+.pc.off{opacity:.45;filter:grayscale(1)}
 </style>
 </head>
 <body>
@@ -166,6 +167,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 <section class="screen" id="wait" hidden>
   <h2>وصلت، ننتظر الباقين</h2>
   <div class="big" id="prog2"></div>
+  <p class="mut" id="waitMsg"></p>
 </section>
 
 <section class="screen" id="reveal" hidden>
@@ -207,10 +209,15 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <div class="big" id="lpct">0%</div>
   <div class="tipcard"><small>💡 نصيحة</small><div id="ltip"></div></div>
 </div>
+<div class="toast" id="net" hidden>انقطع الاتصال… نعيد المحاولة 📡</div>
 <div class="rx" id="rx" hidden><button>😂</button><button>🔥</button><button>👏</button><button>😱</button><button>💀</button></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const socket = io(), $ = s => document.querySelector(s);
+const rnd = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+let pid; try { pid = sessionStorage.pid || (sessionStorage.pid = rnd()); } catch { pid = rnd(); }
+const getRoom = () => { try { return sessionStorage.room || ''; } catch { return ''; } };
+const setRoom = c => { try { if (c) sessionStorage.room = c; else sessionStorage.removeItem('room'); } catch {} };
 let loadT = null;
 const show = id => { document.querySelectorAll('.screen').forEach(e => e.hidden = e.id !== id); $('#rx').hidden = id !== 'reveal'; if (id !== 'guess') $('#gov').hidden = true; $('#loadov').hidden = true; clearInterval(loadT); };
 const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
@@ -240,19 +247,26 @@ function confetti() {
 }
 
 // ---------- الرئيسية والغرفة ----------
-const enter = (ev, payload) => socket.emit(ev, payload, r => { if (!r.ok) $('#homeErr').textContent = r.error; });
-$('#create').onclick = () => enter('create', $('#name').value);
+const enter = (ev, payload) => {
+  try { sessionStorage.name = payload.name; } catch {}
+  socket.emit(ev, { ...payload, pid }, r => { if (!r.ok) $('#homeErr').textContent = r.error; else setRoom(r.code); });
+};
+$('#create').onclick = () => enter('create', { name: $('#name').value });
 $('#join').onclick = () => enter('join', { name: $('#name').value, code: $('#code').value });
 
+let lastLobby = '';
 socket.on('lobby', d => {
+  const sig = JSON.stringify(d);
+  if (sig === lastLobby && !$('#lobby').hidden) return;
+  lastLobby = sig; setRoom(d.code);
   show('lobby'); hostId = d.hostId; avMap = {};
   $('#lobbyCode').textContent = d.code;
   $('#players').replaceChildren(...d.players.map(p => {
     avMap[p.name] = p.av;
     const host = p.id === d.hostId, me = p.id === socket.id;
-    const c = el('div', 'pc' + (host ? ' host' : '') + (me ? ' me' : ''));
+    const c = el('div', 'pc' + (host ? ' host' : '') + (me ? ' me' : '') + (p.connected === false ? ' off' : ''));
     if (host) c.append(el('span', 'crown', '👑'));
-    c.append(el('div', 'pav', p.av), el('div', 'pn', p.name), el('div', 'tag', host ? (me ? 'أنت القائد' : 'قائد الغرفة') : me ? 'أنت' : 'لاعب'));
+    c.append(el('div', 'pav', p.av), el('div', 'pn', p.name), el('div', 'tag', p.connected === false ? 'منقطع…' : host ? (me ? 'أنت القائد' : 'قائد الغرفة') : me ? 'أنت' : 'لاعب'));
     if (socket.id === d.hostId && !me) {
       const k = el('button', 'kick', '✖'); k.setAttribute('aria-label', 'اطرد ' + p.name);
       k.onclick = () => { if (confirm(`تبي تطرد ${p.name}؟`)) socket.emit('kick', p.id); };
@@ -273,9 +287,9 @@ function toast(msg, ms = 3800) { const t = el('div', 'toast', msg); document.bod
 socket.on('announce', t => toast('📢 ' + t, 9000));
 $('#leave').onclick = () => {
   if (!confirm('تبي تطلع من الغرفة؟')) return;
-  socket.emit('leave'); hostId = null; $('#homeErr').textContent = ''; show('home');
+  socket.emit('leave'); setRoom(null); hostId = null; $('#homeErr').textContent = ''; show('home');
 };
-socket.on('kicked', why => { hostId = null; show('home'); $('#homeErr').textContent = typeof why === 'string' ? why : 'القائد طردك من الغرفة'; });
+socket.on('kicked', why => { setRoom(null); hostId = null; show('home'); $('#homeErr').textContent = typeof why === 'string' ? why : 'القائد طردك من الغرفة'; });
 
 // ---------- لوحة الرسم ----------
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -465,6 +479,10 @@ document.querySelectorAll('#targetBox button').forEach(b => b.onclick = () => {
 });
 
 // ---------- وضع ارسم وخمّن ----------
+const gq = [], r3 = v => Math.round(v * 1000) / 1000;
+const rd = s => ({ ...s, x0: r3(s.x0), y0: r3(s.y0), x1: r3(s.x1), y1: r3(s.y1), w: Math.round(s.w * 10000) / 10000 });
+const gFlush = () => { if (gq.length) socket.emit('gs', { a: gq.splice(0, 300) }); };
+setInterval(gFlush, 70);
 const gcv = $('#gcv'), gx = gcv.getContext('2d'), gov = $('#gov');
 let gDrawer = false, gcolor = '#000000', gsize = 8, gtool = 'pen', gdown = false, glast = null, gTick = null, gCd = null;
 gx.lineCap = gx.lineJoin = 'round';
@@ -476,19 +494,18 @@ const gp = e => { const r = gcv.getBoundingClientRect(); return [(e.clientX - r.
 gcv.addEventListener('pointerdown', e => {
   if (!gDrawer) return; gcv.setPointerCapture(e.pointerId);
   const [x, y] = gp(e), c = gtool === 'eraser' ? '#ffffff' : gcolor;
-  if (gtool === 'fill') { fill(gi(x, 640), gi(y, 480), c, gcv); return socket.emit('gs', { t: 'f', x, y, c }); }
+  if (gtool === 'fill') { fill(gi(x, 640), gi(y, 480), c, gcv); gq.push({ t: 'f', x: r3(x), y: r3(y), c }); return gFlush(); }
   gdown = true; glast = [x, y];
-  const s = { t: 'l', x0: x, y0: y, x1: x, y1: y, c, w: gsize / 640 }; gLine(s); socket.emit('gs', s);
+  const s = { t: 'l', x0: x, y0: y, x1: x, y1: y, c, w: gsize / 640 }; gLine(s); gq.push(rd(s));
 });
 gcv.addEventListener('pointermove', e => {
   if (!gdown) return;
   const [x, y] = gp(e), c = gtool === 'eraser' ? '#ffffff' : gcolor;
-  const s = { t: 'l', x0: glast[0], y0: glast[1], x1: x, y1: y, c, w: gsize / 640 }; glast = [x, y]; gLine(s); socket.emit('gs', s);
+  const s = { t: 'l', x0: glast[0], y0: glast[1], x1: x, y1: y, c, w: gsize / 640 }; glast = [x, y]; gLine(s); gq.push(rd(s));
 });
-['pointerup', 'pointercancel'].forEach(t => gcv.addEventListener(t, () => gdown = false));
-socket.on('gs', s => {
-  if (s.t === 'l') gLine(s); else if (s.t === 'f') fill(gi(s.x, 640), gi(s.y, 480), s.c, gcv); else if (s.t === 'c') gClear();
-});
+['pointerup', 'pointercancel'].forEach(t => gcv.addEventListener(t, () => { gdown = false; gFlush(); }));
+const gApply = s => { if (s.t === 'l') gLine(s); else if (s.t === 'f') fill(gi(s.x, 640), gi(s.y, 480), s.c, gcv); else if (s.t === 'c') gClear(); };
+socket.on('gs', d => (d.a || []).forEach(gApply));
 function gTools() {
   const b = $('#gtools'); b.replaceChildren();
   COLORS.forEach(c => {
@@ -497,17 +514,17 @@ function gTools() {
   });
   [['fill', '🪣'], ['eraser', '🧽']].forEach(([t, l]) => { const x = el('button', 'tool' + (gtool === t ? ' on' : ''), l); x.onclick = () => { gtool = t; gTools(); }; b.append(x); });
   const r = el('input'); r.type = 'range'; r.min = 2; r.max = 44; r.value = gsize; r.oninput = () => gsize = +r.value;
-  const w = el('button', 'tool', '🗑️'); w.onclick = () => { if (!gDrawer) return; gClear(); socket.emit('gs', { t: 'c' }); };
+  const w = el('button', 'tool', '🗑️'); w.onclick = () => { if (!gDrawer) return; gClear(); gq.push({ t: 'c' }); gFlush(); };
   b.append(r, w);
 }
 const gBoard = list => $('#gboard').replaceChildren(...list.map(p => {
   const li = el('li', p.ok ? 'ok' : ''); li.append(el('span', '', (avMap[p.name] || '🎨') + ' ' + p.name), el('b', '', p.pts)); return li;
 }));
 const gHint = h => { if (!gDrawer) $('#gHint').textContent = h.join(' '); };
-function startG(sec) {
+function startG(sec, total = sec) {
   clearInterval(gTick); let left = sec; const tb = $('#gtb').firstElementChild;
   const t = () => {
-    $('#gTimer').textContent = left; tb.style.width = left / sec * 100 + '%'; $('#gtb').classList.toggle('low', left <= 10);
+    $('#gTimer').textContent = left; tb.style.width = left / total * 100 + '%'; $('#gtb').classList.toggle('low', left <= 10);
     if (left > 0 && left <= 5) beep(880, .06); if (left-- <= 0) clearInterval(gTick);
   };
   t(); gTick = setInterval(t, 1000);
@@ -519,14 +536,15 @@ socket.on('gturn', d => {
   gBoard(d.board); $('#gchat').replaceChildren();
   if (gDrawer) ov(); else ov(el('h2', '', `${d.drawer} يختار كلمة…`), el('p', 'mut', 'استعد تخمّن!'));
 });
-socket.on('gchoose', ws => {
+const showChoose = ws => {
   const nodes = [el('h2', '', 'اختر كلمة وارسمها')];
   ws.forEach(w => { const b = el('button', 'go opt', w); b.onclick = () => { clearInterval(gCd); socket.emit('gpick', w); ov(); }; nodes.push(b); });
   const cd = el('p', 'mut', 'عندك 15 ثانية تفكر وتختار'); nodes.push(cd);
   clearInterval(gCd); let left = 15;
   gCd = setInterval(() => { left--; cd.textContent = left > 0 ? `باقي ${left} ثانية` : 'خلص الوقت…'; if (left <= 0) clearInterval(gCd); }, 1000);
   ov(...nodes);
-});
+};
+socket.on('gchoose', showChoose);
 socket.on('gdraw', d => { clearInterval(gCd); ov(); gHint(d.hint); startG(d.seconds); if (gDrawer) { gTools(); $('#gtools').hidden = false; } });
 socket.on('gword', w => { $('#gHint').textContent = w; });
 socket.on('ghint', gHint);
@@ -591,6 +609,38 @@ socket.on('admin:snapshot', s => {
     acts.append(msg, rs, cl); box.append(acts); return box;
   }));
 });
+socket.on('gboard', gBoard);
+socket.on('gsync', d => {
+  show('guess'); clearInterval(gTick); clearInterval(gCd); gDrawer = d.drawerId === socket.id; gClear();
+  $('#gInfo').textContent = `الدور ${d.turn} • الهدف ${d.target} نقطة`; $('#gTimer').textContent = '';
+  $('#gtools').hidden = true; $('#gtools').replaceChildren();
+  $('#gin').disabled = gDrawer; $('#gin').placeholder = gDrawer ? 'أنت الرسام' : 'اكتب تخمينك…'; $('#gchat').replaceChildren();
+  gBoard(d.board); (d.strokes || []).forEach(gApply);
+  $('#gHint').textContent = gDrawer && d.word ? d.word : (d.hint || []).join(' ');
+  if (d.stage === 'draw') { ov(); startG(d.left, d.total); if (gDrawer) { gTools(); $('#gtools').hidden = false; } }
+  else if (d.stage === 'choose') { if (gDrawer && d.choices) showChoose(d.choices); else ov(el('h2', '', `${d.drawer} يختار كلمة…`), el('p', 'mut', 'استعد تخمّن!')); }
+  else ov(el('h2', '', 'الدور الجاي بعد شوي…'));
+});
+socket.on('swait', d => {
+  show('wait'); const sp = d && d.spec;
+  $('#wait h2').textContent = sp ? 'اللعبة شغالة الحين' : 'وصلت، ننتظر الباقين';
+  $('#waitMsg').textContent = sp ? 'دخلت في نص الجولة 👋 بتلعب مع الباقين في اللعبة الجاية.' : '';
+});
+
+// ---------- الاتصال: رجوع تلقائي ومزامنة ----------
+const tryRejoin = () => {
+  const code = getRoom(); if (!code || location.hash === '#admin') return;
+  let nm = 'لاعب'; try { nm = sessionStorage.name || nm; } catch {}
+  socket.emit('join', { name: nm, code, pid }, r => {
+    if (!r.ok) { setRoom(null); show('home'); $('#homeErr').textContent = r.error === 'الغرفة غير موجودة' ? 'الغرفة انتهت، سوّ غرفة جديدة أو ادخل برمز ثاني' : r.error; }
+  });
+};
+socket.on('connect', () => { $('#net').hidden = true; tryRejoin(); });
+socket.on('disconnect', () => { $('#net').hidden = false; });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !socket.connected) socket.connect(); });
+setInterval(() => {
+  if (socket.connected && (!$('#lobby').hidden || !$('#wait').hidden)) socket.emit('sync', r => { if (r && !r.ok) tryRejoin(); });
+}, 5000);
 let myOk = 0;
 const ding = () => { beep(880, .12, 'sine'); setTimeout(() => beep(1318, .25, 'sine'), 110); };
 socket.on('gok', p => {

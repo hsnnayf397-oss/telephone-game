@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 2e6 });
+const io = new Server(server, { maxHttpBufferSize: 2e6, pingInterval: 12000, pingTimeout: 20000 });
 const path = require('path');
 const FILES = ['/index.html', '/manifest.json', '/sw.js', '/icon-192.png', '/icon-512.png'];
 app.get(['/', ...FILES], (req, res) => res.sendFile(path.join(__dirname, req.path === '/' ? '/index.html' : req.path)));
@@ -21,13 +21,10 @@ const makeCode = () => {
 // اللاعب i في الجولة r يشتغل على سلسلة اللاعب (i - r)
 const chainIdx = (room, i) => (i - room.round + room.players.length) % room.players.length;
 
-function sendLobby(room) {
-  io.to(room.code).emit('lobby', {
-    code: room.code,
-    hostId: room.hostId,
-    players: room.players.map(p => ({ id: p.id, name: p.name, av: p.av })),
-  });
-}
+const lobbyPayload = room => ({ code: room.code, hostId: room.hostId,
+  players: room.players.map(p => ({ id: p.id, name: p.name, av: p.av, connected: p.connected })) });
+function sendLobby(room) { io.to(room.code).emit('lobby', lobbyPayload(room)); }
+const chainsPayload = room => room.chains.map((entries, k) => ({ owner: room.players[k].name, entries }));
 
 function startRound(room) {
   const r = room.round, n = room.players.length;
@@ -37,12 +34,8 @@ function startRound(room) {
   io.to(room.code).emit('progress', { done: 0, total: n });
   room.players.forEach((p, i) => {
     const prev = r > 0 ? room.chains[chainIdx(room, i)].slice(-1)[0] : null;
-    io.to(p.id).emit('task', {
-      round: r + 1, total: n,
-      type: isDraw ? 'draw' : 'write',
-      prompt: prev ? prev.content : null,
-      seconds,
-    });
+    p.task = { round: r + 1, total: n, type: isDraw ? 'draw' : 'write', prompt: prev ? prev.content : null, seconds, t0: Date.now() };
+    io.to(p.id).emit('task', p.task);
   });
   room.timer = setTimeout(() => endRound(room), (seconds + 5) * 1000);
 }
@@ -58,17 +51,20 @@ function endRound(room) {
   if (room.round < room.players.length) return startRound(room);
   room.phase = 'reveal';
   room.rv = { k: 0, i: -1 };
-  io.to(room.code).emit('reveal', room.chains.map((entries, k) => ({
-    owner: room.players[k].name, entries,
-  })));
+  io.to(room.code).emit('reveal', chainsPayload(room));
 }
 
-function addPlayer(socket, room, name) {
-  const used = new Set(room.players.map(p => p.av));
-  room.players.push({ id: socket.id, name, connected: true, av: AV.find(a => !used.has(a)) || AV[0] });
-  socket.join(room.code);
-  socket.data.code = room.code;
-  sendLobby(room);
+const sanitizeTok = t => String(t || '').replace(/[^\w-]/g, '').slice(0, 40) || Math.random().toString(36).slice(2);
+const everyone = room => [...room.players, ...(room.spec || [])];
+const findTok = (room, tok) => everyone(room).find(p => p.token === tok);
+const findId = (room, id) => everyone(room).find(p => p.id === id);
+function addPlayer(socket, room, name, token, spec) {
+  const used = new Set(everyone(room).map(p => p.av));
+  const p = { id: socket.id, name, token, connected: true, av: AV.find(a => !used.has(a)) || AV[0] };
+  if (spec) { p.spec = true; (room.spec = room.spec || []).push(p); } else room.players.push(p);
+  socket.join(room.code); socket.data.code = room.code;
+  if (room.phase === 'lobby') sendLobby(room);
+  return p;
 }
 
 // ================= وضع ارسم وخمّن =================
@@ -95,9 +91,9 @@ const board = room => { const g = room.g; return room.players.map(p => ({ id: p.
 const clearG = g => { clearTimeout(g.timer); g.timers.forEach(clearTimeout); g.timers = []; };
 
 function startGuess(room, target) {
-  room.g = { turn: 0, target, scores: {}, guessed: new Set(), timers: [], used: new Set() };
+  room.g = { turn: 0, target, scores: {}, guessed: new Set(), timers: [], used: new Set(), strokes: [] };
   room.players.forEach(p => room.g.scores[p.id] = 0);
-  room.phase = 'guess'; room.g.stage = 'loading';
+  room.phase = 'guess'; room.g.stage = 'loading'; room.g.loadEnd = Date.now() + 15000;
   io.to(room.code).emit('gload', { ms: 15000, target });
   room.g.timer = setTimeout(() => nextTurn(room), 15000);
 }
@@ -106,14 +102,14 @@ function nextTurn(room) {
   if (Object.values(g.scores).some(v => v >= g.target)) return endGuess(room);
   const d = room.players[g.turn % n]; g.turn++;
   if (!d.connected) return nextTurn(room);
-  Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: pickWords(g) });
+  Object.assign(g, { drawer: d.id, word: null, guessed: new Set(), stage: 'choose', choices: pickWords(g), strokes: [], rev: new Set() });
   io.to(room.code).emit('gturn', { drawer: d.name, drawerId: d.id, turn: g.turn, target: g.target, board: board(room) });
   io.to(d.id).emit('gchoose', g.choices);
   g.timer = setTimeout(() => startDraw(room, g.choices[0]), 15000);
 }
 function startDraw(room, word) {
   const g = room.g; clearG(g);
-  g.word = word; g.stage = 'draw'; g.seconds = Math.round(80 * (room.speed || 1)); g.t0 = Date.now(); g.rev = new Set();
+  g.word = word; g.strokes = []; g.stage = 'draw'; g.seconds = Math.round(80 * (room.speed || 1)); g.t0 = Date.now(); g.rev = new Set();
   const hint = () => [...word].map((c, i) => c === ' ' ? ' ' : g.rev.has(i) ? c : '_');
   io.to(room.code).emit('gdraw', { hint: hint(), seconds: g.seconds });
   io.to(g.drawer).emit('gword', word);
@@ -144,36 +140,147 @@ const snapshot = () => ({
   rooms: [...rooms.values()].map(r => ({ code: r.code, phase: r.phase, hostId: r.hostId,
     players: r.players.map(p => ({ id: p.id, name: p.name, av: p.av, connected: p.connected })) })),
 });
+const GRACE = 30000;   // مهلة الرجوع بعد الانقطاع (ثواني × 1000)
+
+// اللاعب رجع بجلسة جديدة: نبدّل رقم جلسته في كل مكان
+function reid(room, p, newId) {
+  const oldId = p.id; p.id = newId;
+  if (room.hostId === oldId) room.hostId = newId;
+  if (room.submitted && room.submitted.has(oldId)) { room.submitted.delete(oldId); room.submitted.add(newId); }
+  const g = room.g;
+  if (g) {
+    if (g.drawer === oldId) g.drawer = newId;
+    if (g.guessed && g.guessed.has(oldId)) { g.guessed.delete(oldId); g.guessed.add(newId); }
+    if (g.scores && oldId in g.scores) { g.scores[newId] = g.scores[oldId]; delete g.scores[oldId]; }
+  }
+}
+
+// نرسل للاعب الحالة الحالية للعبة (يستخدم للرجوع، الدخول المتأخر، والمزامنة)
+function syncState(room, socket, p) {
+  if (room.phase === 'lobby') return socket.emit('lobby', lobbyPayload(room));
+  if (room.phase === 'play') {
+    if (p.spec) return socket.emit('swait', { spec: true });
+    if (!room.submitted.has(p.id) && p.task) {
+      const left = Math.max(5, p.task.seconds - Math.floor((Date.now() - p.task.t0) / 1000));
+      socket.emit('task', { ...p.task, seconds: left });
+    } else socket.emit('swait', {});
+    return socket.emit('progress', { done: room.submitted.size, total: room.players.length });
+  }
+  if (room.phase === 'reveal') {
+    socket.emit('reveal', chainsPayload(room));
+    for (let i = 0; i <= room.rv.i; i++) socket.emit('step', { k: room.rv.k, i });
+    if (room.rv.done) socket.emit('end');
+    return;
+  }
+  if (room.phase === 'gover') return socket.emit('gover', board(room));
+  if (room.phase === 'guess') {
+    const g = room.g;
+    if (g.stage === 'loading') return socket.emit('gload', { ms: Math.max(1500, g.loadEnd - Date.now()), target: g.target });
+    const d = room.players.find(x => x.id === g.drawer), me = socket.id === g.drawer;
+    socket.emit('gsync', {
+      drawerId: g.drawer, drawer: d ? d.name : '', turn: g.turn, target: g.target, board: board(room), stage: g.stage,
+      hint: g.word ? [...g.word].map((c, i) => c === ' ' ? ' ' : g.rev && g.rev.has(i) ? c : '_') : [],
+      left: g.stage === 'draw' ? Math.max(1, Math.round((g.t0 + g.seconds * 1000 - Date.now()) / 1000)) : 0,
+      total: g.seconds || 0, word: me ? g.word : null, choices: me && g.stage === 'choose' ? g.choices : null,
+      strokes: g.strokes || [],
+    });
+  }
+}
+
+function rejoin(socket, room, p, cb) {
+  clearTimeout(p.grace);
+  if (p.id !== socket.id) {
+    const o = io.sockets.sockets.get(p.id);
+    if (o) { o.leave(room.code); o.data.code = null; }
+    reid(room, p, socket.id);
+  }
+  p.connected = true;
+  socket.join(room.code); socket.data.code = room.code;
+  cb({ ok: true, code: room.code });
+  if (room.phase === 'lobby') sendLobby(room); else syncState(room, socket, p);
+}
+
+// انقطع اتصاله: نعطيه مهلة يرجع قبل ما نشيله
+function markDown(socket) {
+  const room = rooms.get(socket.data.code); if (!room) return;
+  const p = findId(room, socket.id); if (!p) return;
+  p.connected = false;
+  if (room.phase === 'lobby') sendLobby(room);
+  clearTimeout(p.grace); p.grace = setTimeout(() => finalize(room, p), GRACE);
+}
+
+function finalize(room, p) {
+  if (p.connected || !rooms.has(room.code)) return;
+  if (p.spec) { room.spec = (room.spec || []).filter(x => x !== p); return; }
+  if (room.phase === 'lobby') room.players = room.players.filter(x => x !== p);
+  const alive = room.players.filter(x => x.connected);
+  if (!alive.length) { clearTimeout(room.timer); if (room.g) clearG(room.g); rooms.delete(room.code); return; }
+  if (room.hostId === p.id) { const nh = alive[Math.random() * alive.length | 0]; room.hostId = nh.id; io.to(room.code).emit('host', { id: nh.id, name: nh.name }); }
+  if (room.phase === 'lobby') sendLobby(room);
+  else if (room.phase === 'play' && alive.every(x => room.submitted.has(x.id))) endRound(room);
+  else if (room.phase === 'guess') {
+    const g = room.g;
+    if (g.stage === 'draw' && (g.drawer === p.id || alive.filter(x => x.id !== g.drawer).every(x => g.guessed.has(x.id)))) endTurn(room);
+    else if (g.stage === 'choose' && g.drawer === p.id) nextTurn(room);
+  }
+}
+
+function leaveNow(socket) {
+  const code = socket.data.code, room = rooms.get(code);
+  if (code) socket.leave(code);
+  socket.data.code = null;
+  const p = room && findId(room, socket.id);
+  if (p) { clearTimeout(p.grace); p.connected = false; finalize(room, p); }
+}
+
 function kickSocket(id, why) {
   const t = io.sockets.sockets.get(id);
   if (!t) return;
-  const c = t.data.code; if (c) t.leave(c);
-  if (t.data.drop) t.data.drop();
-  t.data.code = null; t.emit('kicked', why);
+  leaveNow(t); t.emit('kicked', why);
 }
 setInterval(() => { const a = io.sockets.adapter.rooms.get('admins'); if (a && a.size) io.to('admins').emit('admin:snapshot', snapshot()); }, 3000);
 
 io.on('connection', socket => {
-  socket.on('create', (name, cb) => {
-    const room = { code: makeCode(), hostId: socket.id, players: [], phase: 'lobby',
+  socket.on('create', (arg, cb) => {
+    if (typeof cb !== 'function') return;
+    const a = typeof arg === 'string' ? { name: arg } : (arg || {});
+    const room = { code: makeCode(), hostId: socket.id, players: [], spec: [], phase: 'lobby',
                    round: 0, chains: [], submitted: new Set(), timer: null };
     rooms.set(room.code, room);
-    addPlayer(socket, room, clean(name));
-    cb({ ok: true });
+    addPlayer(socket, room, clean(a.name), sanitizeTok(a.pid));
+    cb({ ok: true, code: room.code });
   });
 
-  socket.on('join', ({ name, code }, cb) => {
+  socket.on('join', (arg, cb) => {
+    if (typeof cb !== 'function') return;
+    const { name, code, pid } = arg || {};
     const room = rooms.get(String(code || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g, ''));
     if (!room) return cb({ ok: false, error: 'الغرفة غير موجودة' });
-    if (room.phase !== 'lobby') return cb({ ok: false, error: 'اللعبة بدأت' });
-    if (room.players.length >= 12) return cb({ ok: false, error: 'الغرفة ممتلئة' });
-    addPlayer(socket, room, clean(name));
-    cb({ ok: true });
+    const tok = sanitizeTok(pid), known = findTok(room, tok);
+    if (known) return rejoin(socket, room, known, cb);          // نفس اللاعب يرجع لمكانه
+    if (everyone(room).length >= 12) return cb({ ok: false, error: 'الغرفة ممتلئة' });
+    const nm = clean(name);
+    if (room.phase === 'play' || room.phase === 'reveal') {      // تلفون مكسور شغّال: يتفرّج لين تخلص
+      const p = addPlayer(socket, room, nm, tok, true); syncState(room, socket, p);
+    } else {
+      const p = addPlayer(socket, room, nm, tok);
+      if (room.phase === 'guess') { room.g.scores[socket.id] = 0; io.to(room.code).emit('gboard', board(room)); }
+      if (room.phase !== 'lobby') syncState(room, socket, p);
+    }
+    cb({ ok: true, code: room.code });
+  });
+
+  socket.on('sync', cb => {
+    const room = rooms.get(socket.data.code), p = room && findId(room, socket.id);
+    if (!p) return typeof cb === 'function' && cb({ ok: false });
+    syncState(room, socket, p);
+    if (typeof cb === 'function') cb({ ok: true });
   });
 
   socket.on('start', (opts, cb) => {
     const room = rooms.get(socket.data.code);
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
+    room.players = room.players.filter(p => p.connected);
     if (room.players.length < 2) return cb({ ok: false, error: 'تحتاج لاعبين على الأقل' });
     room.speed = { fast: 0.7, normal: 1, slow: 1.5 }[opts && opts.speed] || 1;
     if (opts && opts.mode === 'guess') { startGuess(room, [500, 1000, 1500, 2000].includes(opts.target) ? opts.target : 1000); return cb({ ok: true }); }
@@ -205,7 +312,7 @@ io.on('connection', socket => {
     const rv = room.rv;
     if (rv.i + 1 < room.chains[rv.k].length) rv.i++;
     else if (rv.k + 1 < room.chains.length) { rv.k++; rv.i = 0; }
-    else return io.to(room.code).emit('end');
+    else { rv.done = true; return io.to(room.code).emit('end'); }
     io.to(room.code).emit('step', { k: rv.k, i: rv.i });
   });
 
@@ -224,8 +331,18 @@ io.on('connection', socket => {
 
   socket.on('gs', st => {
     const room = rooms.get(socket.data.code);
-    if (!room || room.phase !== 'guess' || room.g.stage !== 'draw' || socket.id !== room.g.drawer || !st || typeof st !== 'object') return;
-    socket.to(room.code).emit('gs', st);
+    if (!room || room.phase !== 'guess' || room.g.stage !== 'draw' || socket.id !== room.g.drawer || !st || !Array.isArray(st.a)) return;
+    const g = room.g, ok = [], hex = /^#[0-9a-f]{6}$/i;
+    for (const x of st.a.slice(0, 300)) {
+      if (!x || typeof x !== 'object') continue;
+      let o = null;
+      if (x.t === 'c') { g.strokes = []; o = { t: 'c' }; }
+      else if (x.t === 'l' && [x.x0, x.y0, x.x1, x.y1, x.w].every(Number.isFinite) && hex.test(x.c)) o = { t: 'l', x0: x.x0, y0: x.y0, x1: x.x1, y1: x.y1, w: x.w, c: x.c };
+      else if (x.t === 'f' && [x.x, x.y].every(Number.isFinite) && hex.test(x.c)) o = { t: 'f', x: x.x, y: x.y, c: x.c };
+      if (!o) continue;
+      ok.push(o); if (o.t !== 'c' && g.strokes.length < 6000) g.strokes.push(o);
+    }
+    if (ok.length) socket.to(room.code).emit('gs', { a: ok });
   });
 
   socket.on('guess', text => {
@@ -268,30 +385,13 @@ io.on('connection', socket => {
     const room = rooms.get(socket.data.code);
     if (!room || room.hostId !== socket.id || !['reveal', 'gover'].includes(room.phase)) return;
     room.players = room.players.filter(p => p.connected);
+    (room.spec || []).filter(p => p.connected).forEach(p => { delete p.spec; room.players.push(p); });
+    room.spec = [];
     room.phase = 'lobby';
     sendLobby(room);
   });
 
-  const drop = () => {
-    const room = rooms.get(socket.data.code);
-    if (!room) return;
-    const p = room.players.find(x => x.id === socket.id);
-    if (!p) return;
-    if (room.phase === 'lobby') room.players = room.players.filter(x => x !== p);
-    else p.connected = false;
-    const alive = room.players.filter(x => x.connected);
-    if (!alive.length) { clearTimeout(room.timer); if (room.g) clearG(room.g); rooms.delete(room.code); return; }
-    if (room.hostId === socket.id) { const nh = alive[Math.random() * alive.length | 0]; room.hostId = nh.id; io.to(room.code).emit('host', { id: nh.id, name: nh.name }); }
-    if (room.phase === 'lobby') sendLobby(room);
-    else if (room.phase === 'play' && alive.every(x => room.submitted.has(x.id))) endRound(room);
-    else if (room.phase === 'guess') {
-      const g = room.g;
-      if (g.stage === 'draw' && (g.drawer === socket.id || alive.filter(x => x.id !== g.drawer).every(x => g.guessed.has(x.id)))) endTurn(room);
-      else if (g.stage === 'choose' && g.drawer === socket.id) nextTurn(room);
-    }
-  };
-  socket.data.drop = drop;
-  socket.on('disconnect', drop);
+  socket.on('disconnect', () => markDown(socket));
 
   // ---- أوامر المطوّر (كلها تتأكد إن الجلسة مسجّلة دخول كمطوّر) ----
   socket.on('admin:login', (code, cb) => {
@@ -311,7 +411,7 @@ io.on('connection', socket => {
   socket.on('admin:close', code => {
     if (!socket.data.admin) return;
     const room = rooms.get(code); if (!room) return;
-    [...room.players].forEach(p => kickSocket(p.id, 'المطوّر أغلق الغرفة'));
+    everyone(room).forEach(p => kickSocket(p.id, 'المطوّر أغلق الغرفة'));
   });
   socket.on('admin:reset', code => {
     if (!socket.data.admin) return;
@@ -323,12 +423,7 @@ io.on('connection', socket => {
     if (!socket.data.admin || typeof text !== 'string' || !text.trim()) return;
     (code ? io.to(String(code)) : io).emit('announce', text.trim().slice(0, 140));
   });
-  socket.on('leave', () => {
-    const code = socket.data.code;
-    if (code) socket.leave(code);
-    drop();
-    socket.data.code = null;
-  });
+  socket.on('leave', () => leaveNow(socket));
 });
 
 const PORT = process.env.PORT || 3000;
