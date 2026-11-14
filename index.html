@@ -105,6 +105,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 .tipcard small{color:var(--yel);font-weight:600}
 #ltip{font-size:19px;line-height:1.6;animation:pop .45s}
 [hidden]{display:none!important}
+.box b{font-family:'Lalezar',sans-serif;font-size:30px;color:var(--yel)}
 </style>
 </head>
 <body>
@@ -185,6 +186,19 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <input id="gin" maxlength="60" placeholder="اكتب تخمينك…" autocomplete="off">
   <div class="ov" id="gov" hidden></div>
 </section>
+<section class="screen" id="admin" hidden>
+  <div class="bar"><h2>🛠️ لوحة المطوّر</h2><button class="small" id="admExit">خروج</button></div>
+  <div id="admLogin">
+    <input id="admCode" type="password" placeholder="الرمز السري" autocomplete="off">
+    <button class="go" id="admGo" style="margin-top:10px;width:100%">دخول</button>
+    <p class="err" id="admErr"></p>
+  </div>
+  <div id="admPanel" hidden>
+    <div class="row"><div class="box"><b id="admOnline">0</b><br><small class="mut">متصلين الحين</small></div><div class="box"><b id="admRooms">0</b><br><small class="mut">غرف شغالة</small></div></div>
+    <div class="box"><p class="mut" style="margin-bottom:8px">📢 رسالة لكل اللاعبين</p><div class="row"><input id="admMsg" maxlength="140" placeholder="اكتب الرسالة…"><button id="admSend" class="small">أرسل</button></div></div>
+    <div id="admList" style="display:flex;flex-direction:column;gap:10px"></div>
+  </div>
+</section>
 <div class="load" id="loadov" hidden>
   <div class="bgfx" aria-hidden="true"><span>🎨</span><span>✏️</span><span>🖌️</span><span>🎭</span><span>❓</span><span>💡</span><span>🖍️</span><span>⭐</span></div>
   <h1>ارسم وخمّن</h1>
@@ -255,12 +269,13 @@ socket.on('host', ({ id, name }) => {
   hostId = id; syncReveal();
   toast(id === socket.id ? 'أنت الحين قائد الغرفة 👑' : `👑 ${name} صار قائد الغرفة`);
 });
-function toast(msg) { const t = el('div', 'toast', msg); document.body.append(t); setTimeout(() => t.remove(), 3800); }
+function toast(msg, ms = 3800) { const t = el('div', 'toast', msg); document.body.append(t); setTimeout(() => t.remove(), ms); }
+socket.on('announce', t => toast('📢 ' + t, 9000));
 $('#leave').onclick = () => {
   if (!confirm('تبي تطلع من الغرفة؟')) return;
   socket.emit('leave'); hostId = null; $('#homeErr').textContent = ''; show('home');
 };
-socket.on('kicked', () => { hostId = null; show('home'); $('#homeErr').textContent = 'القائد طردك من الغرفة'; });
+socket.on('kicked', why => { hostId = null; show('home'); $('#homeErr').textContent = typeof why === 'string' ? why : 'القائد طردك من الغرفة'; });
 
 // ---------- لوحة الرسم ----------
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -546,6 +561,35 @@ socket.on('gload', ({ ms, target: tg }) => {
     if (p >= 100) clearInterval(loadT);
   };
   upd(); loadT = setInterval(upd, 100);
+});
+// ---------- لوحة المطوّر (تفتح من الرابط /#admin) ----------
+const PH = { lobby: 'في اللوبي', play: 'تلفون مكسور (يلعبون)', reveal: 'تلفون مكسور (كشف)', guess: 'ارسم وخمّن (يلعبون)', gover: 'ارسم وخمّن (النتيجة)' };
+const openAdmin = () => { if (location.hash === '#admin') show('admin'); };
+openAdmin(); addEventListener('hashchange', openAdmin);
+$('#admExit').onclick = () => { history.replaceState(null, '', location.pathname); location.reload(); };
+$('#admGo').onclick = () => socket.emit('admin:login', $('#admCode').value, r => {
+  if (!r.ok) { $('#admErr').textContent = r.error; return; }
+  $('#admCode').value = ''; $('#admLogin').hidden = true; $('#admPanel').hidden = false;
+});
+$('#admCode').addEventListener('keydown', e => { if (e.key === 'Enter') $('#admGo').click(); });
+$('#admSend').onclick = () => { const t = $('#admMsg').value.trim(); if (t) { socket.emit('admin:broadcast', { text: t }); $('#admMsg').value = ''; } };
+socket.on('admin:snapshot', s => {
+  $('#admOnline').textContent = s.online; $('#admRooms').textContent = s.rooms.length;
+  $('#admList').replaceChildren(...s.rooms.map(r => {
+    const box = el('div', 'box');
+    box.append(el('h2', '', `غرفة ${r.code}`), el('p', 'mut', PH[r.phase] || r.phase));
+    r.players.forEach(p => {
+      const row = el('div', 'bar'); row.style.margin = '8px 0';
+      row.append(el('span', '', `${p.av} ${p.name}${p.id === r.hostId ? ' 👑' : ''}${p.connected ? '' : ' (منقطع)'}`));
+      const k = el('button', 'small kick2', 'اطرده'); k.onclick = () => { if (confirm(`تطرد ${p.name}؟`)) socket.emit('admin:kick', p.id); };
+      row.append(k); box.append(row);
+    });
+    const acts = el('div', 'row');
+    const msg = el('button', 'small', '📢 رسالة للغرفة'); msg.onclick = () => { const t = prompt('الرسالة:'); if (t) socket.emit('admin:broadcast', { text: t, code: r.code }); };
+    const rs = el('button', 'small', '↩️ رجّعهم للوبي'); rs.onclick = () => { if (confirm('تنهي اللعبة وترجّعهم للوبي؟')) socket.emit('admin:reset', r.code); };
+    const cl = el('button', 'small', '🗑️ أغلق الغرفة'); cl.onclick = () => { if (confirm('تقفل الغرفة وتطلّع كل اللاعبين؟')) socket.emit('admin:close', r.code); };
+    acts.append(msg, rs, cl); box.append(acts); return box;
+  }));
 });
 let myOk = 0;
 const ding = () => { beep(880, .12, 'sine'); setTimeout(() => beep(1318, .25, 'sine'), 110); };

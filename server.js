@@ -131,6 +131,28 @@ function endTurn(room) {
 }
 function endGuess(room) { room.phase = 'gover'; io.to(room.code).emit('gover', board(room)); }
 
+// ================= لوحة المطوّر =================
+// الرمز السري ما يتكتب في الكود أبدًا (الكود عام على GitHub)، ينقرأ من متغير البيئة ADMIN_CODE في Render
+const crypto = require('crypto');
+const ADMIN_CODE = process.env.ADMIN_CODE || '';
+const sha = x => crypto.createHash('sha256').update(String(x)).digest();
+const okCode = c => ADMIN_CODE.length >= 8 && crypto.timingSafeEqual(sha(c), sha(ADMIN_CODE));
+const fails = new Map();
+const ipOf = sk => String(sk.handshake.headers['x-forwarded-for'] || sk.handshake.address).split(',')[0].trim();
+const snapshot = () => ({
+  online: io.engine.clientsCount,
+  rooms: [...rooms.values()].map(r => ({ code: r.code, phase: r.phase, hostId: r.hostId,
+    players: r.players.map(p => ({ id: p.id, name: p.name, av: p.av, connected: p.connected })) })),
+});
+function kickSocket(id, why) {
+  const t = io.sockets.sockets.get(id);
+  if (!t) return;
+  const c = t.data.code; if (c) t.leave(c);
+  if (t.data.drop) t.data.drop();
+  t.data.code = null; t.emit('kicked', why);
+}
+setInterval(() => { const a = io.sockets.adapter.rooms.get('admins'); if (a && a.size) io.to('admins').emit('admin:snapshot', snapshot()); }, 3000);
+
 io.on('connection', socket => {
   socket.on('create', (name, cb) => {
     const room = { code: makeCode(), hostId: socket.id, players: [], phase: 'lobby',
@@ -268,7 +290,39 @@ io.on('connection', socket => {
       else if (g.stage === 'choose' && g.drawer === socket.id) nextTurn(room);
     }
   };
+  socket.data.drop = drop;
   socket.on('disconnect', drop);
+
+  // ---- أوامر المطوّر (كلها تتأكد إن الجلسة مسجّلة دخول كمطوّر) ----
+  socket.on('admin:login', (code, cb) => {
+    if (typeof cb !== 'function') return;
+    if (ADMIN_CODE.length < 8) return cb({ ok: false, error: 'اللوحة غير مفعّلة على السيرفر' });
+    const ip = ipOf(socket), f = fails.get(ip) || { n: 0, until: 0 };
+    if (f.until > Date.now()) return cb({ ok: false, error: 'محاولات كثيرة، انتظر 5 دقايق وجرّب' });
+    if (typeof code === 'string' && okCode(code)) {
+      fails.delete(ip); socket.data.admin = true; socket.join('admins');
+      cb({ ok: true }); return socket.emit('admin:snapshot', snapshot());
+    }
+    f.n++; if (f.n >= 5) { f.until = Date.now() + 5 * 60 * 1000; f.n = 0; }
+    fails.set(ip, f); cb({ ok: false, error: 'الرمز غلط' });
+  });
+  socket.on('admin:refresh', () => { if (socket.data.admin) socket.emit('admin:snapshot', snapshot()); });
+  socket.on('admin:kick', id => { if (socket.data.admin && typeof id === 'string') kickSocket(id, 'المطوّر أخرجك من الغرفة'); });
+  socket.on('admin:close', code => {
+    if (!socket.data.admin) return;
+    const room = rooms.get(code); if (!room) return;
+    [...room.players].forEach(p => kickSocket(p.id, 'المطوّر أغلق الغرفة'));
+  });
+  socket.on('admin:reset', code => {
+    if (!socket.data.admin) return;
+    const room = rooms.get(code); if (!room) return;
+    clearTimeout(room.timer); if (room.g) clearG(room.g);
+    room.players = room.players.filter(p => p.connected); room.phase = 'lobby'; sendLobby(room);
+  });
+  socket.on('admin:broadcast', ({ text, code } = {}) => {
+    if (!socket.data.admin || typeof text !== 'string' || !text.trim()) return;
+    (code ? io.to(String(code)) : io).emit('announce', text.trim().slice(0, 140));
+  });
   socket.on('leave', () => {
     const code = socket.data.code;
     if (code) socket.leave(code);
