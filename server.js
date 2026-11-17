@@ -87,7 +87,7 @@ function lev1(a, b) {
   if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
   return a.length > b.length ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
 }
-const board = room => { const g = room.g; return room.players.map(p => ({ id: p.id, name: p.name, pts: g.scores[p.id] || 0, ok: g.guessed.has(p.id) || p.id === g.drawer })).sort((a, b) => b.pts - a.pts); };
+const board = (room, all) => { const g = room.g; return room.players.filter(p => all || p.connected).map(p => ({ id: p.id, name: p.name, av: p.av, pts: g.scores[p.id] || 0, ok: g.guessed.has(p.id) || p.id === g.drawer, off: !p.connected })).sort((a, b) => b.pts - a.pts); };
 const clearG = g => { clearTimeout(g.timer); g.timers.forEach(clearTimeout); g.timers = []; };
 
 function startGuess(room, target) {
@@ -125,7 +125,7 @@ function endTurn(room) {
   io.to(room.code).emit('gend', { word: g.word, board: board(room) });
   g.timer = setTimeout(() => nextTurn(room), 5000);
 }
-function endGuess(room) { room.phase = 'gover'; io.to(room.code).emit('gover', board(room)); }
+function endGuess(room) { room.phase = 'gover'; io.to(room.code).emit('gover', board(room, true)); }
 
 // ================= لوحة المطوّر =================
 // الرمز السري ما يتكتب في الكود أبدًا (الكود عام على GitHub)، ينقرأ من متغير البيئة ADMIN_CODE في Render
@@ -172,7 +172,7 @@ function syncState(room, socket, p) {
     if (room.rv.done) socket.emit('end');
     return;
   }
-  if (room.phase === 'gover') return socket.emit('gover', board(room));
+  if (room.phase === 'gover') return socket.emit('gover', board(room, true));
   if (room.phase === 'guess') {
     const g = room.g;
     if (g.stage === 'loading') return socket.emit('gload', { ms: Math.max(1500, g.loadEnd - Date.now()), target: g.target });
@@ -256,10 +256,13 @@ io.on('connection', socket => {
     const { name, code, pid } = arg || {};
     const room = rooms.get(String(code || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g, ''));
     if (!room) return cb({ ok: false, error: 'الغرفة غير موجودة' });
-    const tok = sanitizeTok(pid), known = findTok(room, tok);
-    if (known) return rejoin(socket, room, known, cb);          // نفس اللاعب يرجع لمكانه
-    if (everyone(room).length >= 12) return cb({ ok: false, error: 'الغرفة ممتلئة' });
-    const nm = clean(name);
+    const tok = sanitizeTok(pid), nm0 = clean(name), nkey = x => String(x).trim().toLowerCase();
+    // نفس اللاعب يرجع لمكانه: بنفس الهوية، أو بنفس الاسم لو مكانه القديم منقطع (نقاطه تنحفظ)
+    const known = findTok(room, tok) || everyone(room).find(p => !p.connected && nkey(p.name) === nkey(nm0));
+    if (known) { known.token = tok; return rejoin(socket, room, known, cb); }
+    if (everyone(room).filter(p => p.connected).length >= 12) return cb({ ok: false, error: 'الغرفة ممتلئة' });
+    let nm = nm0, i = 2;
+    while (everyone(room).some(p => nkey(p.name) === nkey(nm))) nm = `${nm0} ${i++}`;
     if (room.phase === 'play' || room.phase === 'reveal') {      // تلفون مكسور شغّال: يتفرّج لين تخلص
       const p = addPlayer(socket, room, nm, tok, true); syncState(room, socket, p);
     } else {

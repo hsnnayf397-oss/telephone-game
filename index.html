@@ -107,6 +107,8 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
 [hidden]{display:none!important}
 .box b{font-family:'Lalezar',sans-serif;font-size:30px;color:var(--yel)}
 .pc.off{opacity:.45;filter:grayscale(1)}
+#gboard li.off{opacity:.45}
+#exitFab{position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:45;padding:4px 12px;font-size:13px;box-shadow:0 3px 0 #000}
 </style>
 </head>
 <body>
@@ -209,6 +211,7 @@ input[type=color]{width:40px;height:36px;padding:0;border-radius:10px;cursor:poi
   <div class="big" id="lpct">0%</div>
   <div class="tipcard"><small>💡 نصيحة</small><div id="ltip"></div></div>
 </div>
+<button id="exitFab" hidden>🚪 اخرج</button>
 <div class="toast" id="net" hidden>انقطع الاتصال… نعيد المحاولة 📡</div>
 <div class="rx" id="rx" hidden><button>😂</button><button>🔥</button><button>👏</button><button>😱</button><button>💀</button></div>
 <script src="/socket.io/socket.io.js"></script>
@@ -219,7 +222,7 @@ let pid; try { pid = sessionStorage.pid || (sessionStorage.pid = rnd()); } catch
 const getRoom = () => { try { return sessionStorage.room || ''; } catch { return ''; } };
 const setRoom = c => { try { if (c) sessionStorage.room = c; else sessionStorage.removeItem('room'); } catch {} };
 let loadT = null;
-const show = id => { document.querySelectorAll('.screen').forEach(e => e.hidden = e.id !== id); $('#rx').hidden = id !== 'reveal'; if (id !== 'guess') $('#gov').hidden = true; $('#loadov').hidden = true; clearInterval(loadT); };
+const show = id => { document.querySelectorAll('.screen').forEach(e => e.hidden = e.id !== id); $('#rx').hidden = id !== 'reveal'; $('#exitFab').hidden = !['guess', 'task', 'wait', 'reveal'].includes(id); if (id !== 'guess') $('#gov').hidden = true; $('#loadov').hidden = true; clearInterval(loadT); };
 const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
 let hostId = null, avMap = {}, chains = [];
 const amHost = () => socket.id === hostId;
@@ -518,7 +521,7 @@ function gTools() {
   b.append(r, w);
 }
 const gBoard = list => $('#gboard').replaceChildren(...list.map(p => {
-  const li = el('li', p.ok ? 'ok' : ''); li.append(el('span', '', (avMap[p.name] || '🎨') + ' ' + p.name), el('b', '', p.pts)); return li;
+  const li = el('li', (p.ok ? 'ok' : '') + (p.off ? ' off' : '')); li.append(el('span', '', (p.av || avMap[p.name] || '🎨') + ' ' + p.name), el('b', '', p.pts)); return li;
 }));
 const gHint = h => { if (!gDrawer) $('#gHint').textContent = h.join(' '); };
 function startG(sec, total = sec) {
@@ -610,6 +613,11 @@ socket.on('admin:snapshot', s => {
   }));
 });
 socket.on('gboard', gBoard);
+$('#exitFab').onclick = () => {
+  if (!confirm('تبي تطلع من اللعبة؟ لو رجعت لنفس الغرفة نقاطك تنحفظ.')) return;
+  socket.emit('leave'); setRoom(null); hostId = null; clearInterval(gTick); clearInterval(gCd); clearInterval(loadT);
+  $('#homeErr').textContent = ''; show('home');
+};
 socket.on('gsync', d => {
   show('guess'); clearInterval(gTick); clearInterval(gCd); gDrawer = d.drawerId === socket.id; gClear();
   $('#gInfo').textContent = `الدور ${d.turn} • الهدف ${d.target} نقطة`; $('#gTimer').textContent = '';
@@ -661,7 +669,7 @@ $('#gin').addEventListener('blur', () => gscr.classList.remove('kb'));
 socket.on('gend', d => { clearInterval(gTick); gDrawer = false; $('#gtools').hidden = true; $('#gtools').replaceChildren(); gBoard(d.board); ov(el('p', 'mut', 'الكلمة كانت'), el('h1', '', d.word)); });
 socket.on('gover', list => {
   clearInterval(gTick); const medals = ['🥇', '🥈', '🥉'], nodes = [el('h1', '', 'النتيجة النهائية 🏆')];
-  list.forEach((p, i) => nodes.push(el('div', 'chip', `${medals[i] || ''} ${avMap[p.name] || ''} ${p.name} — ${p.pts}`)));
+  list.forEach((p, i) => nodes.push(el('div', 'chip', `${medals[i] || ''} ${p.av || avMap[p.name] || ''} ${p.name} — ${p.pts}${p.off ? ' (طلع)' : ''}`)));
   if (amHost()) { const again = el('button', 'go', 'العب مرة ثانية'); again.onclick = () => socket.emit('restart'); nodes.push(again); }
   else nodes.push(el('p', 'mut', 'ننتظر المضيف…'));
   ov(...nodes); confetti();
