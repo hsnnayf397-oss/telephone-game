@@ -10,7 +10,7 @@ const FILES = ['/index.html', '/manifest.json', '/sw.js', '/icon-192.png', '/ico
 app.get(['/', ...FILES], (req, res) => res.sendFile(path.join(__dirname, req.path === '/' ? '/index.html' : req.path)));
 
 const rooms = new Map();
-const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢'];
+const AV = ['🦊','🐙','🦄','🐸','🐼','🦁','🐧','🦖','👾','🐝','🦉','🐢','🐯','🐨','🐵','🦋','🐬','🦈','🐲','🦅','🐰','🐻','🦔','🐳'];
 const clean = s => String(s || '').trim().slice(0, 16) || 'لاعب';
 const makeCode = () => {
   let code;
@@ -21,7 +21,7 @@ const makeCode = () => {
 // اللاعب i في الجولة r يشتغل على سلسلة اللاعب (i - r)
 const chainIdx = (room, i) => (i - room.round + room.players.length) % room.players.length;
 
-const lobbyPayload = room => ({ code: room.code, hostId: room.hostId,
+const lobbyPayload = room => ({ code: room.code, hostId: room.hostId, cfg: room.cfg,
   players: room.players.map(p => ({ id: p.id, name: p.name, av: p.av, connected: p.connected })) });
 function sendLobby(room) { io.to(room.code).emit('lobby', lobbyPayload(room)); }
 const chainsPayload = room => room.chains.map((entries, k) => ({ owner: room.players[k].name, entries }));
@@ -58,9 +58,9 @@ const sanitizeTok = t => String(t || '').replace(/[^\w-]/g, '').slice(0, 40) || 
 const everyone = room => [...room.players, ...(room.spec || [])];
 const findTok = (room, tok) => everyone(room).find(p => p.token === tok);
 const findId = (room, id) => everyone(room).find(p => p.id === id);
-function addPlayer(socket, room, name, token, spec) {
+function addPlayer(socket, room, name, token, spec, av) {
   const used = new Set(everyone(room).map(p => p.av));
-  const p = { id: socket.id, name, token, connected: true, av: AV.find(a => !used.has(a)) || AV[0] };
+  const p = { id: socket.id, name, token, connected: true, av: (AV.includes(av) && !used.has(av)) ? av : (AV.find(a => !used.has(a)) || AV[0]) };
   if (spec) { p.spec = true; (room.spec = room.spec || []).push(p); } else room.players.push(p);
   socket.join(room.code); socket.data.code = room.code;
   if (room.phase === 'lobby') sendLobby(room);
@@ -245,15 +245,16 @@ io.on('connection', socket => {
     if (typeof cb !== 'function') return;
     const a = typeof arg === 'string' ? { name: arg } : (arg || {});
     const room = { code: makeCode(), hostId: socket.id, players: [], spec: [], phase: 'lobby',
-                   round: 0, chains: [], submitted: new Set(), timer: null };
+                   round: 0, chains: [], submitted: new Set(), timer: null,
+                   cfg: { mode: 'chain', target: 1000, speed: 'normal', pub: false } };
     rooms.set(room.code, room);
-    addPlayer(socket, room, clean(a.name), sanitizeTok(a.pid));
+    addPlayer(socket, room, clean(a.name), sanitizeTok(a.pid), false, a.av);
     cb({ ok: true, code: room.code });
   });
 
   socket.on('join', (arg, cb) => {
     if (typeof cb !== 'function') return;
-    const { name, code, pid } = arg || {};
+    const { name, code, pid, av } = arg || {};
     const room = rooms.get(String(code || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g, ''));
     if (!room) return cb({ ok: false, error: 'الغرفة غير موجودة' });
     const tok = sanitizeTok(pid), nm0 = clean(name), nkey = x => String(x).trim().toLowerCase();
@@ -264,13 +265,33 @@ io.on('connection', socket => {
     let nm = nm0, i = 2;
     while (everyone(room).some(p => nkey(p.name) === nkey(nm))) nm = `${nm0} ${i++}`;
     if (room.phase === 'play' || room.phase === 'reveal') {      // تلفون مكسور شغّال: يتفرّج لين تخلص
-      const p = addPlayer(socket, room, nm, tok, true); syncState(room, socket, p);
+      const p = addPlayer(socket, room, nm, tok, true, av); syncState(room, socket, p);
     } else {
-      const p = addPlayer(socket, room, nm, tok);
+      const p = addPlayer(socket, room, nm, tok, false, av);
       if (room.phase === 'guess') { room.g.scores[socket.id] = 0; io.to(room.code).emit('gboard', board(room)); }
       if (room.phase !== 'lobby') syncState(room, socket, p);
     }
     cb({ ok: true, code: room.code });
+  });
+
+  socket.on('cfg', c => {
+    const room = rooms.get(socket.data.code);
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby' || !c || typeof c !== 'object') return;
+    room.cfg = {
+      mode: c.mode === 'guess' ? 'guess' : 'chain',
+      target: [500, 1000, 1500, 2000].includes(c.target) ? c.target : 1000,
+      speed: ['fast', 'normal', 'slow'].includes(c.speed) ? c.speed : 'normal',
+      pub: !!c.pub,
+    };
+    sendLobby(room);
+  });
+
+  socket.on('rooms:list', cb => {
+    if (typeof cb !== 'function') return;
+    cb([...rooms.values()].filter(r => r.cfg && r.cfg.pub && everyone(r).some(p => p.connected)).slice(0, 30).map(r => {
+      const h = r.players.find(p => p.id === r.hostId);
+      return { code: r.code, host: h ? h.name : '', count: everyone(r).filter(p => p.connected).length, phase: r.phase, mode: r.cfg.mode, target: r.cfg.target };
+    }));
   });
 
   socket.on('sync', cb => {
@@ -286,6 +307,9 @@ io.on('connection', socket => {
     room.players = room.players.filter(p => p.connected);
     if (room.players.length < 2) return cb({ ok: false, error: 'تحتاج لاعبين على الأقل' });
     room.speed = { fast: 0.7, normal: 1, slow: 1.5 }[opts && opts.speed] || 1;
+    room.cfg = { ...room.cfg, mode: opts && opts.mode === 'guess' ? 'guess' : 'chain',
+      target: [500, 1000, 1500, 2000].includes(opts && opts.target) ? opts.target : 1000,
+      speed: ['fast', 'normal', 'slow'].includes(opts && opts.speed) ? opts.speed : 'normal' };
     if (opts && opts.mode === 'guess') { startGuess(room, [500, 1000, 1500, 2000].includes(opts.target) ? opts.target : 1000); return cb({ ok: true }); }
     room.phase = 'play';
     room.round = 0;
